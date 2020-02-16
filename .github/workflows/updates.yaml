@@ -1,0 +1,13 @@
+---
+name: Search for updates
+
+on:
+  schedule:
+    - cron: '30 1 * * *'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: ./scripts/update.sh

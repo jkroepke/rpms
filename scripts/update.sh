@@ -17,10 +17,10 @@ docker run --rm -ti \
   centos:8 \
   bash -c "rpm2cpio /work/tmp/git.src.rpm | cpio -idmv --no-absolute-filenames"
 
-rm -rf packages/git*.tar.*
-
 if [ -z "${CI+x}" ]; then
-  git add -A
-  git commit -m "Update to ${VERSION}"
-  git push
+  if ! git diff --exit-code; then
+    git add -A
+    git commit -m "Update to ${VERSION}"
+    git push
+  fi
 fi
