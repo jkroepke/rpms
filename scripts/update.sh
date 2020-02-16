@@ -1,10 +1,14 @@
 #!/bin/bash
 
+set -euo pipefail
+
+VERSION=${1:-"$(./scripts/search.sh)"}
+
 rm -rf packages/*
 
 curl -sSf -LJ \
   -o ./tmp/git.src.rpm \
-  https://download.fedoraproject.org/pub/fedora/linux/development/rawhide/Everything/source/tree/Packages/g/git-2.25.0-1.fc32.src.rpm
+  "https://download.fedoraproject.org/pub/fedora/linux/development/rawhide/Everything/source/tree/Packages/g/${VERSION}"
 
 docker run --rm -ti \
   --name unpack-rpm \
@@ -13,4 +17,10 @@ docker run --rm -ti \
   centos:8 \
   bash -c "rpm2cpio /work/tmp/git.src.rpm | cpio -idmv --no-absolute-filenames"
 
-rm -rf git*.tar.*
+rm -rf packages/git*.tar.*
+
+if [ -z "${CI+x}" ]; then
+  git add -A
+  git commit -m "Update to ${VERSION}"
+  git push
+fi
