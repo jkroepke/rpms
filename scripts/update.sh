@@ -10,7 +10,7 @@ curl -sSf -LJ \
   -o ./tmp/git.src.rpm \
   "https://download.fedoraproject.org/pub/fedora/linux/development/rawhide/Everything/source/tree/Packages/g/${VERSION}"
 
-docker run --rm -ti \
+docker run --rm \
   --name unpack-rpm \
   -v "${PWD}:/work" \
   -w /work/packages/ \
