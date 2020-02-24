@@ -14,3 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - run: ./scripts/update.sh
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}

@@ -20,7 +20,8 @@ docker run --rm \
 if [ -z "${CI+x}" ]; then
   if ! git diff --exit-code; then
     git add -A
+    git config --local user.email "action@github.com"
+    git config --local user.name "GitHub Action"
     git commit -m "Update to ${VERSION}"
-    git push
   fi
 fi
