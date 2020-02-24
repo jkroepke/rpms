@@ -17,7 +17,7 @@ docker run --rm \
   centos:8 \
   bash -c "rpm2cpio /work/tmp/git.src.rpm | cpio -idmv --no-absolute-filenames"
 
-if [ -z "${CI+x}" ]; then
+if [ -n "${GITHUB_EVENT_PATH+x}" ]; then
   if ! git diff --exit-code; then
     git add -A
     git config --local user.email "action@github.com"
