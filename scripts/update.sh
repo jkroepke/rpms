@@ -26,4 +26,6 @@ if [ "${VERSION}" != "" ]; then
       git commit -m "Update to ${VERSION}"
     fi
   fi
+else
+  exit 0
 fi
