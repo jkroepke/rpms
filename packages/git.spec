@@ -8,9 +8,11 @@
 
 # Settings for Fedora
 %if 0%{?fedora}
+%bcond_without              asciidoctor
 # linkchecker is not available on EL
 %bcond_without              linkcheck
 %else
+%bcond_with                 asciidoctor
 %bcond_with                 linkcheck
 %endif
 
@@ -82,8 +84,8 @@
 #global rcrev   .rc0
 
 Name:           git
-Version:        2.25.1
-Release:        3%{?rcrev}%{?dist}
+Version:        2.26.0
+Release:        1%{?rcrev}%{?dist}
 Summary:        Fast Version Control System
 License:        GPLv2
 URL:            https://git-scm.com/
@@ -118,7 +120,13 @@ Patch0:         git-cvsimport-Ignore-cvsps-2.2b1-Branches-output.patch
 %if %{with docs}
 # pod2man is needed to build Git.3pm
 BuildRequires:  %{_bindir}/pod2man
+%if %{with asciidoctor}
+BuildRequires:  docbook5-style-xsl
+BuildRequires:  rubygem-asciidoctor
+%else
 BuildRequires:  asciidoc >= 8.4.1
+%endif
+# endif with asciidoctor
 BuildRequires:  xmlto
 %if %{with linkcheck}
 BuildRequires:  linkchecker
@@ -127,6 +135,7 @@ BuildRequires:  linkchecker
 %endif
 # endif with docs
 BuildRequires:  desktop-file-utils
+BuildRequires:  diffutils
 BuildRequires:  emacs
 BuildRequires:  expat-devel
 BuildRequires:  findutils
@@ -139,6 +148,7 @@ BuildRequires:  make
 BuildRequires:  openssl-devel
 BuildRequires:  pcre2-devel
 BuildRequires:  perl(Error)
+BuildRequires:  perl(lib)
 BuildRequires:  perl(Test)
 %if %{use_perl_generators}
 BuildRequires:  perl-generators
@@ -210,12 +220,19 @@ BuildRequires:  perl(CGI::Carp)
 BuildRequires:  perl(CGI::Util)
 BuildRequires:  perl(DBD::SQLite)
 BuildRequires:  perl(Digest::MD5)
+BuildRequires:  perl(Fcntl)
+BuildRequires:  perl(File::Basename)
+BuildRequires:  perl(File::Copy)
+BuildRequires:  perl(File::Find)
+BuildRequires:  perl(filetest)
 BuildRequires:  perl(HTTP::Date)
 BuildRequires:  perl(IO::Pty)
 BuildRequires:  perl(JSON)
 BuildRequires:  perl(JSON::PP)
 BuildRequires:  perl(Mail::Address)
 BuildRequires:  perl(Memoize)
+BuildRequires:  perl(POSIX)
+BuildRequires:  perl(Term::ReadLine)
 BuildRequires:  perl(Test::More)
 BuildRequires:  perl(Time::HiRes)
 %if %{with python2}
@@ -228,7 +245,9 @@ BuildRequires:  python3-devel
 # endif with python3
 BuildRequires:  subversion
 BuildRequires:  subversion-perl
+BuildRequires:  tar
 BuildRequires:  time
+BuildRequires:  zip
 %endif
 # endif with tests
 
@@ -501,11 +520,6 @@ sed -i '/^git-p4/d' command-list.txt
 %endif
 # endif without p4
 
-# Work around issue on s390x with gcc10 (#1799408)
-%if 0%{?fedora} >= 32 && %{_arch} == s390x
-%global build_cflags %(echo %build_cflags | sed 's/-mtune=z13/-mtune=zEC12/')
-%endif
-
 # Use these same options for every invocation of 'make'.
 # Otherwise it will rebuild in %%install due to flags changes.
 # Pipe to tee to aid confirmation/verification of settings.
@@ -526,6 +540,10 @@ PYTHON_PATH = %{__python2}
 NO_PYTHON = 1
 %endif
 # endif with python2
+%if %{with asciidoctor}
+USE_ASCIIDOCTOR = 1
+%endif
+# endif with asciidoctor
 htmldir = %{?_pkgdocdir}%{!?_pkgdocdir:%{_docdir}/%{name}-%{version}}
 prefix = %{_prefix}
 perllibdir = %{perl_vendorlib}
@@ -584,6 +602,8 @@ export SOURCE_DATE_EPOCH=$(date -r version +%%s 2>/dev/null)
 %make_build -C contrib/credential/libsecret/
 %endif
 # endif with libsecret
+
+%make_build -C contrib/credential/netrc/
 
 %make_build -C contrib/diff-highlight/
 
@@ -862,7 +882,7 @@ sed -i "s@\(GIT_TEST_OPTS='.*\)'@\1 --root=$testdir'@" GIT-BUILD-OPTIONS
 touch -r ts GIT-BUILD-OPTIONS
 
 # Run the tests
-%make_build test || ./print-failed-test-output
+%__make test || ./print-failed-test-output
 
 # Run contrib/credential/netrc tests
 mkdir -p contrib/credential
@@ -1033,6 +1053,26 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Sun Mar 22 2020 Todd Zullinger <tmz@pobox.com> - 2.26.0-1
+- update to 2.26.0
+
+* Mon Mar 16 2020 Todd Zullinger <tmz@pobox.com> - 2.26.0-0.3.rc2
+- update to 2.26.0-rc2
+
+* Thu Mar 12 2020 Todd Zullinger <tmz@pobox.com> - 2.26.0-0.2.rc1
+- remove s390x gcc10 workaround (#1799408)
+
+* Tue Mar 10 2020 Todd Zullinger <tmz@pobox.com> - 2.26.0-0.1.rc1
+- update to 2.26.0-rc1
+- adjust make test options
+- add missing build deps for tests
+
+* Fri Mar 06 2020 Todd Zullinger <tmz@pobox.com> - 2.26.0-0.0.rc0
+- update to 2.26.0-rc0
+
+* Wed Feb 26 2020 Todd Zullinger <tmz@pobox.com> - 2.25.1-4
+- use Asciidoctor to build documentation when possible
+
 * Sat Feb 22 2020 Todd Zullinger <tmz@pobox.com> - 2.25.1-3
 - work around issue on s390x with gcc10 (#1799408)
 
