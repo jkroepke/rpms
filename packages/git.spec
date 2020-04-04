@@ -85,7 +85,7 @@
 
 Name:           git
 Version:        2.26.0
-Release:        1%{?rcrev}%{?dist}
+Release:        1%{?rcrev}%{?dist}.1
 Summary:        Fast Version Control System
 License:        GPLv2
 URL:            https://git-scm.com/
@@ -204,12 +204,12 @@ BuildRequires:  gnupg
 BuildRequires:  gnupg2-smime
 %endif
 # endif fedora or el > 8
-%if 0%{?fedora} || 0%{?rhel} == 6 || ( 0%{?rhel} >= 7 && ( %{_arch} == ppc64le || %{_arch} == x86_64 ) )
+%if 0%{?fedora} || 0%{?rhel} == 6 || ( 0%{?rhel} >= 7 && ( "%{_arch}" == "ppc64le" || "%{_arch}" == "x86_64" ) )
 BuildRequires:  highlight
 %endif
 # endif fedora, el-6, or el7+ (ppc64le/x86_64)
 BuildRequires:  httpd
-%if 0%{?fedora} && ! ( %{_arch} == i386 || %{_arch} == s390x )
+%if 0%{?fedora} && ! ( "%{_arch}" == "i386" || "%{_arch}" == "s390x" )
 BuildRequires:  jgit
 %endif
 # endif fedora (except i386 and s390x)
@@ -1053,6 +1053,9 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Thu Apr 02 2020 Björn Esser <besser82@fedoraproject.org> - 2.26.0-1.1
+- Fix string quoting for rpm >= 4.16
+
 * Sun Mar 22 2020 Todd Zullinger <tmz@pobox.com> - 2.26.0-1
 - update to 2.26.0
 
