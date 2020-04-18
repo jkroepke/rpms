@@ -1,0 +1,3853 @@
+From fd88a5bd5b8fcd67b8487957462bdeb79818feda Mon Sep 17 00:00:00 2001
+From: Peter Hunt <pehunt@redhat.com>
+Date: Tue, 11 Feb 2020 14:33:09 -0500
+Subject: [PATCH] klog: don't write to /tmp
+
+klog currently doesn't have an API to not write to /tmp. One has to "pass" down flags to it.
+since cri-o uses libraries that use klog, we need this hack to not write klog logs to /tmp
+
+Signed-off-by: Peter Hunt <pehunt@redhat.com>
+---
+ cmd/crio/main.go | 18 ++++++++++++++----
+ go.mod           |  1 +
+ 2 files changed, 15 insertions(+), 4 deletions(-)
+
+diff --git a/cmd/crio/main.go b/cmd/crio/main.go
+index c83ae1c64..b23e5a4eb 100644
+--- a/cmd/crio/main.go
++++ b/cmd/crio/main.go
+@@ -4,6 +4,7 @@ import (
+ 	"context"
+ 	goflag "flag"
+ 	"fmt"
++	"io/ioutil"
+ 	"net"
+ 	"net/http"
+ 	_ "net/http/pprof"
+@@ -22,6 +23,7 @@ import (
+ 	"github.com/cri-o/cri-o/server"
+ 	"github.com/cri-o/cri-o/utils"
+ 	"github.com/cri-o/cri-o/version"
++	"github.com/golang/glog"
+ 	"github.com/sirupsen/logrus"
+ 	"github.com/soheilhy/cmux"
+ 	"github.com/urfave/cli"
+@@ -221,8 +223,18 @@ func catchShutdown(gserver *grpc.Server, sserver *server.Server, hserver *http.S
+ }
+ 
+ func main() {
+-	// https://github.com/kubernetes/kubernetes/issues/17162
+-	goflag.CommandLine.Parse([]string{})
++	// Unfortunately, there's no way to ask glog to not write to tmp without this kludge.
++	glogFlagSet := goflag.NewFlagSet("glog", goflag.ExitOnError)
++	glog.InitFlags(glogFlagSet)
++
++	if err := glogFlagSet.Set("logtostderr", "false"); err != nil {
++		fmt.Fprintf(os.Stderr, "unable to set logtostderr for glog: %v\n", err)
++	}
++	if err := glogFlagSet.Set("alsologtostderr", "false"); err != nil {
++		fmt.Fprintf(os.Stderr, "unable to set alsologtostderr for glog: %v\n", err)
++	}
++
++	glog.SetOutput(ioutil.Discard)
+ 
+ 	if reexec.Init() {
+ 		return
+diff --git a/vendor.conf b/vendor.conf
+index f215fb399..661a5ef13 100644
+--- a/vendor.conf
++++ b/vendor.conf
+@@ -51,7 +51,7 @@ github.com/syndtr/gocapability e7cb7fa329f456b3855136a2642b197bad7366ba
+ github.com/blang/semver v3.5.0
+ github.com/BurntSushi/toml v0.3.0
+ github.com/mitchellh/go-wordwrap ad45545899c7b13c020ea92b2072220eefad42b8
+-github.com/golang/glog 23def4e6c14b4da8ac2ed8007337bc5eb5007998
++github.com/golang/glog 35651a385d5ca9c382acdd35010eecbc206d386b https://github.com/haircommander/klog
+ github.com/davecgh/go-spew v1.1.0
+ github.com/go-openapi/spec 6aced65f8501fe1217321abf0749d354824ba2ff
+ github.com/go-openapi/jsonpointer 779f45308c19820f1a69e9a4cd965f496e0da10f
+diff --git a/vendor/github.com/golang/glog/README b/vendor/github.com/golang/glog/README
+deleted file mode 100644
+index 387b4eb68..000000000
+--- a/vendor/github.com/golang/glog/README
++++ /dev/null
+@@ -1,44 +0,0 @@
+-glog
+-====
+-
+-Leveled execution logs for Go.
+-
+-This is an efficient pure Go implementation of leveled logs in the
+-manner of the open source C++ package
+-	https://github.com/google/glog
+-
+-By binding methods to booleans it is possible to use the log package
+-without paying the expense of evaluating the arguments to the log.
+-Through the -vmodule flag, the package also provides fine-grained
+-control over logging at the file level.
+-
+-The comment from glog.go introduces the ideas:
+-
+-	Package glog implements logging analogous to the Google-internal
+-	C++ INFO/ERROR/V setup.  It provides functions Info, Warning,
+-	Error, Fatal, plus formatting variants such as Infof. It
+-	also provides V-style logging controlled by the -v and
+-	-vmodule=file=2 flags.
+-	
+-	Basic examples:
+-	
+-		glog.Info("Prepare to repel boarders")
+-	
+-		glog.Fatalf("Initialization failed: %s", err)
+-	
+-	See the documentation for the V function for an explanation
+-	of these examples:
+-	
+-		if glog.V(2) {
+-			glog.Info("Starting transaction...")
+-		}
+-	
+-		glog.V(2).Infoln("Processed", nItems, "elements")
+-
+-
+-The repository contains an open source version of the log package
+-used inside Google. The master copy of the source lives inside
+-Google, not here. The code in this repo is for export only and is not itself
+-under development. Feature requests will be ignored.
+-
+-Send bug reports to golang-nuts@googlegroups.com.
+diff --git a/vendor/github.com/golang/glog/README.md b/vendor/github.com/golang/glog/README.md
+new file mode 100644
+index 000000000..841468b4b
+--- /dev/null
++++ b/vendor/github.com/golang/glog/README.md
+@@ -0,0 +1,97 @@
++klog
++====
++
++klog is a permanent fork of https://github.com/golang/glog.
++
++## Why was klog created?
++
++The decision to create klog was one that wasn't made lightly, but it was necessary due to some
++drawbacks that are present in [glog](https://github.com/golang/glog). Ultimately, the fork was created due to glog not being under active development; this can be seen in the glog README:
++
++> The code in this repo [...] is not itself under development
++
++This makes us unable to solve many use cases without a fork. The factors that contributed to needing feature development are listed below:
++
++ * `glog` [presents a lot "gotchas"](https://github.com/kubernetes/kubernetes/issues/61006) and introduces challenges in containerized environments, all of which aren't well documented.
++ * `glog` doesn't provide an easy way to test logs, which detracts from the stability of software using it
++ * A long term goal is to implement a logging interface that allows us to add context, change output format, etc.
++ 
++Historical context is available here:
++
++ * https://github.com/kubernetes/kubernetes/issues/61006
++ * https://github.com/kubernetes/kubernetes/issues/70264
++ * https://groups.google.com/forum/#!msg/kubernetes-sig-architecture/wCWiWf3Juzs/hXRVBH90CgAJ
++ * https://groups.google.com/forum/#!msg/kubernetes-dev/7vnijOMhLS0/1oRiNtigBgAJ
++
++----
++
++How to use klog
++===============
++- Replace imports for `github.com/golang/glog` with `k8s.io/klog`
++- Use `klog.InitFlags(nil)` explicitly for initializing global flags as we no longer use `init()` method to register the flags
++- You can now use `log-file` instead of `log-dir` for logging to a single file (See `examples/log_file/usage_log_file.go`)
++- If you want to redirect everything logged using klog somewhere else (say syslog!), you can use `klog.SetOutput()` method and supply a `io.Writer`. (See `examples/set_output/usage_set_output.go`)
++- For more logging conventions (See [Logging Conventions](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-instrumentation/logging.md))
++
++### Coexisting with glog
++This package can be used side by side with glog. [This example](examples/coexist_glog/coexist_glog.go) shows how to initialize and syncronize flags from the global `flag.CommandLine` FlagSet. In addition, the example makes use of stderr as combined output by setting `alsologtostderr` (or `logtostderr`) to `true`.
++
++## Community, discussion, contribution, and support
++
++Learn how to engage with the Kubernetes community on the [community page](http://kubernetes.io/community/).
++
++You can reach the maintainers of this project at:
++
++- [Slack](https://kubernetes.slack.com/messages/sig-architecture)
++- [Mailing List](https://groups.google.com/forum/#!forum/kubernetes-sig-architecture)
++
++### Code of conduct
++
++Participation in the Kubernetes community is governed by the [Kubernetes Code of Conduct](code-of-conduct.md).
++
++----
++
++glog
++====
++
++Leveled execution logs for Go.
++
++This is an efficient pure Go implementation of leveled logs in the
++manner of the open source C++ package
++	https://github.com/google/glog
++
++By binding methods to booleans it is possible to use the log package
++without paying the expense of evaluating the arguments to the log.
++Through the -vmodule flag, the package also provides fine-grained
++control over logging at the file level.
++
++The comment from glog.go introduces the ideas:
++
++	Package glog implements logging analogous to the Google-internal
++	C++ INFO/ERROR/V setup.  It provides functions Info, Warning,
++	Error, Fatal, plus formatting variants such as Infof. It
++	also provides V-style logging controlled by the -v and
++	-vmodule=file=2 flags.
++
++	Basic examples:
++
++		glog.Info("Prepare to repel boarders")
++
++		glog.Fatalf("Initialization failed: %s", err)
++
++	See the documentation for the V function for an explanation
++	of these examples:
++
++		if glog.V(2) {
++			glog.Info("Starting transaction...")
++		}
++
++		glog.V(2).Infoln("Processed", nItems, "elements")
++
++
++The repository contains an open source version of the log package
++used inside Google. The master copy of the source lives inside
++Google, not here. The code in this repo is for export only and is not itself
++under development. Feature requests will be ignored.
++
++Send bug reports to golang-nuts@googlegroups.com.
+diff --git a/vendor/github.com/golang/glog/go.mod b/vendor/github.com/golang/glog/go.mod
+new file mode 100644
+index 000000000..3877d8546
+--- /dev/null
++++ b/vendor/github.com/golang/glog/go.mod
+@@ -0,0 +1,5 @@
++module k8s.io/klog
++
++go 1.12
++
++require github.com/go-logr/logr v0.1.0
+diff --git a/vendor/github.com/golang/glog/glog.go b/vendor/github.com/golang/glog/klog.go
+similarity index 83%
+rename from vendor/github.com/golang/glog/glog.go
+rename to vendor/github.com/golang/glog/klog.go
+index 54bd7afdc..b8737ba14 100644
+--- a/vendor/github.com/golang/glog/glog.go
++++ b/vendor/github.com/golang/glog/klog.go
+@@ -14,32 +14,32 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-// Package glog implements logging analogous to the Google-internal C++ INFO/ERROR/V setup.
++// Package klog implements logging analogous to the Google-internal C++ INFO/ERROR/V setup.
+ // It provides functions Info, Warning, Error, Fatal, plus formatting variants such as
+ // Infof. It also provides V-style logging controlled by the -v and -vmodule=file=2 flags.
+ //
+ // Basic examples:
+ //
+-//	glog.Info("Prepare to repel boarders")
++//	klog.Info("Prepare to repel boarders")
+ //
+-//	glog.Fatalf("Initialization failed: %s", err)
++//	klog.Fatalf("Initialization failed: %s", err)
+ //
+ // See the documentation for the V function for an explanation of these examples:
+ //
+-//	if glog.V(2) {
+-//		glog.Info("Starting transaction...")
++//	if klog.V(2) {
++//		klog.Info("Starting transaction...")
+ //	}
+ //
+-//	glog.V(2).Infoln("Processed", nItems, "elements")
++//	klog.V(2).Infoln("Processed", nItems, "elements")
+ //
+ // Log output is buffered and written periodically using Flush. Programs
+ // should call Flush before exiting to guarantee all log output is written.
+ //
+-// By default, all log statements write to files in a temporary directory.
++// By default, all log statements write to standard error.
+ // This package provides several flags that modify this behavior.
+ // As a result, flag.Parse must be called before any logging is done.
+ //
+-//	-logtostderr=false
++//	-logtostderr=true
+ //		Logs are written to standard error instead of to files.
+ //	-alsologtostderr=false
+ //		Logs are written to standard error as well as to files.
+@@ -78,6 +78,7 @@ import (
+ 	"fmt"
+ 	"io"
+ 	stdLog "log"
++	"math"
+ 	"os"
+ 	"path/filepath"
+ 	"runtime"
+@@ -396,13 +397,6 @@ type flushSyncWriter interface {
+ }
+ 
+ func init() {
+-	flag.BoolVar(&logging.toStderr, "logtostderr", false, "log to standard error instead of files")
+-	flag.BoolVar(&logging.alsoToStderr, "alsologtostderr", false, "log to standard error as well as files")
+-	flag.Var(&logging.verbosity, "v", "log level for V logs")
+-	flag.Var(&logging.stderrThreshold, "stderrthreshold", "logs at or above this threshold go to stderr")
+-	flag.Var(&logging.vmodule, "vmodule", "comma-separated list of pattern=N settings for file-filtered logging")
+-	flag.Var(&logging.traceLocation, "log_backtrace_at", "when logging hits line file:N, emit a stack trace")
+-
+ 	// Default stderrThreshold is ERROR.
+ 	logging.stderrThreshold = errorLog
+ 
+@@ -410,6 +404,43 @@ func init() {
+ 	go logging.flushDaemon()
+ }
+ 
++var initDefaultsOnce sync.Once
++
++// InitFlags is for explicitly initializing the flags.
++func InitFlags(flagset *flag.FlagSet) {
++
++	// Initialize defaults.
++	initDefaultsOnce.Do(func() {
++		logging.logDir = ""
++		logging.logFile = ""
++		logging.logFileMaxSizeMB = 1800
++		logging.toStderr = true
++		logging.alsoToStderr = false
++		logging.skipHeaders = false
++		logging.addDirHeader = false
++		logging.skipLogHeaders = false
++	})
++
++	if flagset == nil {
++		flagset = flag.CommandLine
++	}
++
++	flagset.StringVar(&logging.logDir, "log_dir", logging.logDir, "If non-empty, write log files in this directory")
++	flagset.StringVar(&logging.logFile, "log_file", logging.logFile, "If non-empty, use this log file")
++	flagset.Uint64Var(&logging.logFileMaxSizeMB, "log_file_max_size", logging.logFileMaxSizeMB,
++		"Defines the maximum size a log file can grow to. Unit is megabytes. "+
++			"If the value is 0, the maximum file size is unlimited.")
++	flagset.BoolVar(&logging.toStderr, "logtostderr", logging.toStderr, "log to standard error instead of files")
++	flagset.BoolVar(&logging.alsoToStderr, "alsologtostderr", logging.alsoToStderr, "log to standard error as well as files")
++	flagset.Var(&logging.verbosity, "v", "number for the log level verbosity")
++	flagset.BoolVar(&logging.skipHeaders, "add_dir_header", logging.addDirHeader, "If true, adds the file directory to the header")
++	flagset.BoolVar(&logging.skipHeaders, "skip_headers", logging.skipHeaders, "If true, avoid header prefixes in the log messages")
++	flagset.BoolVar(&logging.skipLogHeaders, "skip_log_headers", logging.skipLogHeaders, "If true, avoid headers when opening log files")
++	flagset.Var(&logging.stderrThreshold, "stderrthreshold", "logs at or above this threshold go to stderr")
++	flagset.Var(&logging.vmodule, "vmodule", "comma-separated list of pattern=N settings for file-filtered logging")
++	flagset.Var(&logging.traceLocation, "log_backtrace_at", "when logging hits line file:N, emit a stack trace")
++}
++
+ // Flush flushes all pending log I/O.
+ func Flush() {
+ 	logging.lockAndFlushAll()
+@@ -453,6 +484,27 @@ type loggingT struct {
+ 	// safely using atomic.LoadInt32.
+ 	vmodule   moduleSpec // The state of the -vmodule flag.
+ 	verbosity Level      // V logging level, the value of the -v flag/
++
++	// If non-empty, overrides the choice of directory in which to write logs.
++	// See createLogDirs for the full list of possible destinations.
++	logDir string
++
++	// If non-empty, specifies the path of the file to write logs. mutually exclusive
++	// with the log-dir option.
++	logFile string
++
++	// When logFile is specified, this limiter makes sure the logFile won't exceeds a certain size. When exceeds, the
++	// logFile will be cleaned up. If this value is 0, no size limitation will be applied to logFile.
++	logFileMaxSizeMB uint64
++
++	// If true, do not add the prefix headers, useful when used with SetOutput
++	skipHeaders bool
++
++	// If true, do not add the headers to log files
++	skipLogHeaders bool
++
++	// If true, add the file directory to the header
++	addDirHeader bool
+ }
+ 
+ // buffer holds a byte Buffer for reuse. The zero value is ready for use.
+@@ -538,9 +590,14 @@ func (l *loggingT) header(s severity, depth int) (*buffer, string, int) {
+ 		file = "???"
+ 		line = 1
+ 	} else {
+-		slash := strings.LastIndex(file, "/")
+-		if slash >= 0 {
+-			file = file[slash+1:]
++		if slash := strings.LastIndex(file, "/"); slash >= 0 {
++			path := file
++			file = path[slash+1:]
++			if l.addDirHeader {
++				if dirsep := strings.LastIndex(path[:slash], "/"); dirsep >= 0 {
++					file = path[dirsep+1:]
++				}
++			}
+ 		}
+ 	}
+ 	return l.formatHeader(s, file, line), file, line
+@@ -556,6 +613,9 @@ func (l *loggingT) formatHeader(s severity, file string, line int) *buffer {
+ 		s = infoLog // for safety.
+ 	}
+ 	buf := l.getBuffer()
++	if l.skipHeaders {
++		return buf
++	}
+ 
+ 	// Avoid Fprintf, for speed. The format is so simple that we can do it quickly by hand.
+ 	// It's worth about 3X. Fprintf is hard.
+@@ -667,6 +727,49 @@ func (l *loggingT) printWithFileLine(s severity, file string, line int, alsoToSt
+ 	l.output(s, buf, file, line, alsoToStderr)
+ }
+ 
++// redirectBuffer is used to set an alternate destination for the logs
++type redirectBuffer struct {
++	w io.Writer
++}
++
++func (rb *redirectBuffer) Sync() error {
++	return nil
++}
++
++func (rb *redirectBuffer) Flush() error {
++	return nil
++}
++
++func (rb *redirectBuffer) Write(bytes []byte) (n int, err error) {
++	return rb.w.Write(bytes)
++}
++
++// SetOutput sets the output destination for all severities
++func SetOutput(w io.Writer) {
++	logging.mu.Lock()
++	defer logging.mu.Unlock()
++	for s := fatalLog; s >= infoLog; s-- {
++		rb := &redirectBuffer{
++			w: w,
++		}
++		logging.file[s] = rb
++	}
++}
++
++// SetOutputBySeverity sets the output destination for specific severity
++func SetOutputBySeverity(name string, w io.Writer) {
++	logging.mu.Lock()
++	defer logging.mu.Unlock()
++	sev, ok := severityByName(name)
++	if !ok {
++		panic(fmt.Sprintf("SetOutputBySeverity(%q): unrecognized severity name", name))
++	}
++	rb := &redirectBuffer{
++		w: w,
++	}
++	logging.file[sev] = rb
++}
++
+ // output writes the data to the log files and releases the buffer.
+ func (l *loggingT) output(s severity, buf *buffer, file string, line int, alsoToStderr bool) {
+ 	l.mu.Lock()
+@@ -676,33 +779,44 @@ func (l *loggingT) output(s severity, buf *buffer, file string, line int, alsoTo
+ 		}
+ 	}
+ 	data := buf.Bytes()
+-	if !flag.Parsed() {
+-		os.Stderr.Write([]byte("ERROR: logging before flag.Parse: "))
+-		os.Stderr.Write(data)
+-	} else if l.toStderr {
++	if l.toStderr {
+ 		os.Stderr.Write(data)
+ 	} else {
+ 		if alsoToStderr || l.alsoToStderr || s >= l.stderrThreshold.get() {
+ 			os.Stderr.Write(data)
+ 		}
+-		if l.file[s] == nil {
+-			if err := l.createFiles(s); err != nil {
+-				os.Stderr.Write(data) // Make sure the message appears somewhere.
+-				l.exit(err)
++
++		if logging.logFile != "" {
++			// Since we are using a single log file, all of the items in l.file array
++			// will point to the same file, so just use one of them to write data.
++			if l.file[infoLog] == nil {
++				if err := l.createFiles(infoLog); err != nil {
++					os.Stderr.Write(data) // Make sure the message appears somewhere.
++					l.exit(err)
++				}
+ 			}
+-		}
+-		switch s {
+-		case fatalLog:
+-			l.file[fatalLog].Write(data)
+-			fallthrough
+-		case errorLog:
+-			l.file[errorLog].Write(data)
+-			fallthrough
+-		case warningLog:
+-			l.file[warningLog].Write(data)
+-			fallthrough
+-		case infoLog:
+ 			l.file[infoLog].Write(data)
++		} else {
++			if l.file[s] == nil {
++				if err := l.createFiles(s); err != nil {
++					os.Stderr.Write(data) // Make sure the message appears somewhere.
++					l.exit(err)
++				}
++			}
++
++			switch s {
++			case fatalLog:
++				l.file[fatalLog].Write(data)
++				fallthrough
++			case errorLog:
++				l.file[errorLog].Write(data)
++				fallthrough
++			case warningLog:
++				l.file[warningLog].Write(data)
++				fallthrough
++			case infoLog:
++				l.file[infoLog].Write(data)
++			}
+ 		}
+ 	}
+ 	if s == fatalLog {
+@@ -741,7 +855,7 @@ func (l *loggingT) output(s severity, buf *buffer, file string, line int, alsoTo
+ 
+ // timeoutFlush calls Flush and returns when it completes or after timeout
+ // elapses, whichever happens first.  This is needed because the hooks invoked
+-// by Flush may deadlock when glog.Fatal is called from a hook that holds
++// by Flush may deadlock when klog.Fatal is called from a hook that holds
+ // a lock.
+ func timeoutFlush(timeout time.Duration) {
+ 	done := make(chan bool, 1)
+@@ -752,7 +866,7 @@ func timeoutFlush(timeout time.Duration) {
+ 	select {
+ 	case <-done:
+ 	case <-time.After(timeout):
+-		fmt.Fprintln(os.Stderr, "glog: Flush took longer than", timeout)
++		fmt.Fprintln(os.Stderr, "klog: Flush took longer than", timeout)
+ 	}
+ }
+ 
+@@ -802,18 +916,33 @@ func (l *loggingT) exit(err error) {
+ type syncBuffer struct {
+ 	logger *loggingT
+ 	*bufio.Writer
+-	file   *os.File
+-	sev    severity
+-	nbytes uint64 // The number of bytes written to this file
++	file     *os.File
++	sev      severity
++	nbytes   uint64 // The number of bytes written to this file
++	maxbytes uint64 // The max number of bytes this syncBuffer.file can hold before cleaning up.
+ }
+ 
+ func (sb *syncBuffer) Sync() error {
+ 	return sb.file.Sync()
+ }
+ 
++// CalculateMaxSize returns the real max size in bytes after considering the default max size and the flag options.
++func CalculateMaxSize() uint64 {
++	if logging.logFile != "" {
++		if logging.logFileMaxSizeMB == 0 {
++			// If logFileMaxSizeMB is zero, we don't have limitations on the log size.
++			return math.MaxUint64
++		}
++		// Flag logFileMaxSizeMB is in MB for user convenience.
++		return logging.logFileMaxSizeMB * 1024 * 1024
++	}
++	// If "log_file" flag is not specified, the target file (sb.file) will be cleaned up when reaches a fixed size.
++	return MaxSize
++}
++
+ func (sb *syncBuffer) Write(p []byte) (n int, err error) {
+-	if sb.nbytes+uint64(len(p)) >= MaxSize {
+-		if err := sb.rotateFile(time.Now()); err != nil {
++	if sb.nbytes+uint64(len(p)) >= sb.maxbytes {
++		if err := sb.rotateFile(time.Now(), false); err != nil {
+ 			sb.logger.exit(err)
+ 		}
+ 	}
+@@ -826,13 +955,15 @@ func (sb *syncBuffer) Write(p []byte) (n int, err error) {
+ }
+ 
+ // rotateFile closes the syncBuffer's file and starts a new one.
+-func (sb *syncBuffer) rotateFile(now time.Time) error {
++// The startup argument indicates whether this is the initial startup of klog.
++// If startup is true, existing files are opened for appending instead of truncated.
++func (sb *syncBuffer) rotateFile(now time.Time, startup bool) error {
+ 	if sb.file != nil {
+ 		sb.Flush()
+ 		sb.file.Close()
+ 	}
+ 	var err error
+-	sb.file, _, err = create(severityName[sb.sev], now)
++	sb.file, _, err = create(severityName[sb.sev], now, startup)
+ 	sb.nbytes = 0
+ 	if err != nil {
+ 		return err
+@@ -840,6 +971,10 @@ func (sb *syncBuffer) rotateFile(now time.Time) error {
+ 
+ 	sb.Writer = bufio.NewWriterSize(sb.file, bufferSize)
+ 
++	if sb.logger.skipLogHeaders {
++		return nil
++	}
++
+ 	// Write header.
+ 	var buf bytes.Buffer
+ 	fmt.Fprintf(&buf, "Log file created at: %s\n", now.Format("2006/01/02 15:04:05"))
+@@ -864,10 +999,11 @@ func (l *loggingT) createFiles(sev severity) error {
+ 	// has already been created, we can stop.
+ 	for s := sev; s >= infoLog && l.file[s] == nil; s-- {
+ 		sb := &syncBuffer{
+-			logger: l,
+-			sev:    s,
++			logger:   l,
++			sev:      s,
++			maxbytes: CalculateMaxSize(),
+ 		}
+-		if err := sb.rotateFile(now); err != nil {
++		if err := sb.rotateFile(now, true); err != nil {
+ 			return err
+ 		}
+ 		l.file[s] = sb
+@@ -875,11 +1011,11 @@ func (l *loggingT) createFiles(sev severity) error {
+ 	return nil
+ }
+ 
+-const flushInterval = 30 * time.Second
++const flushInterval = 5 * time.Second
+ 
+ // flushDaemon periodically flushes the log file buffers.
+ func (l *loggingT) flushDaemon() {
+-	for _ = range time.NewTicker(flushInterval).C {
++	for range time.NewTicker(flushInterval).C {
+ 		l.lockAndFlushAll()
+ 	}
+ }
+@@ -986,9 +1122,9 @@ type Verbose bool
+ // The returned value is a boolean of type Verbose, which implements Info, Infoln
+ // and Infof. These methods will write to the Info log if called.
+ // Thus, one may write either
+-//	if glog.V(2) { glog.Info("log this") }
++//	if klog.V(2) { klog.Info("log this") }
+ // or
+-//	glog.V(2).Info("log this")
++//	klog.V(2).Info("log this")
+ // The second form is shorter but the first is cheaper if logging is off because it does
+ // not evaluate its arguments.
+ //
+@@ -1062,7 +1198,7 @@ func InfoDepth(depth int, args ...interface{}) {
+ }
+ 
+ // Infoln logs to the INFO log.
+-// Arguments are handled in the manner of fmt.Println; a newline is appended if missing.
++// Arguments are handled in the manner of fmt.Println; a newline is always appended.
+ func Infoln(args ...interface{}) {
+ 	logging.println(infoLog, args...)
+ }
+@@ -1086,7 +1222,7 @@ func WarningDepth(depth int, args ...interface{}) {
+ }
+ 
+ // Warningln logs to the WARNING and INFO logs.
+-// Arguments are handled in the manner of fmt.Println; a newline is appended if missing.
++// Arguments are handled in the manner of fmt.Println; a newline is always appended.
+ func Warningln(args ...interface{}) {
+ 	logging.println(warningLog, args...)
+ }
+@@ -1110,7 +1246,7 @@ func ErrorDepth(depth int, args ...interface{}) {
+ }
+ 
+ // Errorln logs to the ERROR, WARNING, and INFO logs.
+-// Arguments are handled in the manner of fmt.Println; a newline is appended if missing.
++// Arguments are handled in the manner of fmt.Println; a newline is always appended.
+ func Errorln(args ...interface{}) {
+ 	logging.println(errorLog, args...)
+ }
+@@ -1136,7 +1272,7 @@ func FatalDepth(depth int, args ...interface{}) {
+ 
+ // Fatalln logs to the FATAL, ERROR, WARNING, and INFO logs,
+ // including a stack trace of all running goroutines, then calls os.Exit(255).
+-// Arguments are handled in the manner of fmt.Println; a newline is appended if missing.
++// Arguments are handled in the manner of fmt.Println; a newline is always appended.
+ func Fatalln(args ...interface{}) {
+ 	logging.println(fatalLog, args...)
+ }
+diff --git a/vendor/github.com/golang/glog/glog_file.go b/vendor/github.com/golang/glog/klog_file.go
+similarity index 75%
+rename from vendor/github.com/golang/glog/glog_file.go
+rename to vendor/github.com/golang/glog/klog_file.go
+index 65075d281..e82cb4fbf 100644
+--- a/vendor/github.com/golang/glog/glog_file.go
++++ b/vendor/github.com/golang/glog/klog_file.go
+@@ -20,7 +20,6 @@ package glog
+ 
+ import (
+ 	"errors"
+-	"flag"
+ 	"fmt"
+ 	"os"
+ 	"os/user"
+@@ -36,13 +35,9 @@ var MaxSize uint64 = 1024 * 1024 * 1800
+ // logDirs lists the candidate directories for new log files.
+ var logDirs []string
+ 
+-// If non-empty, overrides the choice of directory in which to write logs.
+-// See createLogDirs for the full list of possible destinations.
+-var logDir = flag.String("log_dir", "", "If non-empty, write log files in this directory")
+-
+ func createLogDirs() {
+-	if *logDir != "" {
+-		logDirs = append(logDirs, *logDir)
++	if logging.logDir != "" {
++		logDirs = append(logDirs, logging.logDir)
+ 	}
+ 	logDirs = append(logDirs, os.TempDir())
+ }
+@@ -102,7 +97,16 @@ var onceLogDirs sync.Once
+ // contains tag ("INFO", "FATAL", etc.) and t.  If the file is created
+ // successfully, create also attempts to update the symlink for that tag, ignoring
+ // errors.
+-func create(tag string, t time.Time) (f *os.File, filename string, err error) {
++// The startup argument indicates whether this is the initial startup of klog.
++// If startup is true, existing files are opened for appending instead of truncated.
++func create(tag string, t time.Time, startup bool) (f *os.File, filename string, err error) {
++	if logging.logFile != "" {
++		f, err := openOrCreate(logging.logFile, startup)
++		if err == nil {
++			return f, logging.logFile, nil
++		}
++		return nil, "", fmt.Errorf("log: unable to create log: %v", err)
++	}
+ 	onceLogDirs.Do(createLogDirs)
+ 	if len(logDirs) == 0 {
+ 		return nil, "", errors.New("log: no log dirs")
+@@ -111,7 +115,7 @@ func create(tag string, t time.Time) (f *os.File, filename string, err error) {
+ 	var lastErr error
+ 	for _, dir := range logDirs {
+ 		fname := filepath.Join(dir, name)
+-		f, err := os.Create(fname)
++		f, err := openOrCreate(fname, startup)
+ 		if err == nil {
+ 			symlink := filepath.Join(dir, link)
+ 			os.Remove(symlink)        // ignore err
+@@ -122,3 +126,14 @@ func create(tag string, t time.Time) (f *os.File, filename string, err error) {
+ 	}
+ 	return nil, "", fmt.Errorf("log: cannot create log: %v", lastErr)
+ }
++
++// The startup argument indicates whether this is the initial startup of klog.
++// If startup is true, existing files are opened for appending instead of truncated.
++func openOrCreate(name string, startup bool) (*os.File, error) {
++	if startup {
++		f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
++		return f, err
++	}
++	f, err := os.Create(name)
++	return f, err
++}
+diff --git a/vendor/github.com/google/glog/COPYING b/vendor/github.com/google/glog/COPYING
+new file mode 100644
+index 000000000..38396b580
+--- /dev/null
++++ b/vendor/github.com/google/glog/COPYING
+@@ -0,0 +1,65 @@
++Copyright (c) 2008, Google Inc.
++All rights reserved.
++
++Redistribution and use in source and binary forms, with or without
++modification, are permitted provided that the following conditions are
++met:
++
++    * Redistributions of source code must retain the above copyright
++notice, this list of conditions and the following disclaimer.
++    * Redistributions in binary form must reproduce the above
++copyright notice, this list of conditions and the following disclaimer
++in the documentation and/or other materials provided with the
++distribution.
++    * Neither the name of Google Inc. nor the names of its
++contributors may be used to endorse or promote products derived from
++this software without specific prior written permission.
++
++THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++
++A function gettimeofday in utilities.cc is based on
++
++http://www.google.com/codesearch/p?hl=en#dR3YEbitojA/COPYING&q=GetSystemTimeAsFileTime%20license:bsd
++
++The license of this code is:
++
++Copyright (c) 2003-2008, Jouni Malinen <j@w1.fi> and contributors
++All Rights Reserved.
++
++Redistribution and use in source and binary forms, with or without
++modification, are permitted provided that the following conditions are
++met:
++
++1. Redistributions of source code must retain the above copyright
++   notice, this list of conditions and the following disclaimer.
++
++2. Redistributions in binary form must reproduce the above copyright
++   notice, this list of conditions and the following disclaimer in the
++   documentation and/or other materials provided with the distribution.
++
++3. Neither the name(s) of the above-listed copyright holder(s) nor the
++   names of its contributors may be used to endorse or promote products
++   derived from this software without specific prior written permission.
++
++THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+diff --git a/vendor/github.com/google/glog/README.md b/vendor/github.com/google/glog/README.md
+new file mode 100644
+index 000000000..965766c7c
+--- /dev/null
++++ b/vendor/github.com/google/glog/README.md
+@@ -0,0 +1,10 @@
++[![Build Status](https://img.shields.io/travis/google/glog/master.svg?label=Travis)](https://travis-ci.org/google/glog/builds)
++[![Grunt status](https://img.shields.io/appveyor/ci/google-admin/glog/master.svg?label=Appveyor)](https://ci.appveyor.com/project/google-admin/glog/history)
++
++This repository contains a C++ implementation of the Google logging
++module.  Documentation for the implementation is in doc/.
++
++See INSTALL for (generic) installation instructions for C++: basically
++```sh
++./autogen.sh && ./configure && make && make install
++```
+diff --git a/vendor/github.com/google/glog/README.windows b/vendor/github.com/google/glog/README.windows
+new file mode 100644
+index 000000000..ea6ccc20b
+--- /dev/null
++++ b/vendor/github.com/google/glog/README.windows
+@@ -0,0 +1,17 @@
++This project has been ported to Windows, including stack tracing, signal
++handling, and unit tests.
++
++A Visual Studio solution file is explicitly not provided because it is not
++maintainable. Instead, a CMake build system exists to generate the correct
++solution for your version of Visual Studio.
++
++In short,
++  (1) Install CMake from: https://cmake.org/download/
++  (2) With CMake on your PATH, run `cmake .` to generate the build files
++  (3) Either use `cmake --build`, or open the generated solution
++
++CMake provides different generators, and by default will pick the most relevant
++one to your environment. If you need a specific version of Visual Studio, use
++`cmake . -G <generator-name>`, and see `cmake --help` for the available
++generators. Also see `-T <toolset-name>`, which can used to request the native
++x64 toolchain with `-T host=x64`.
+\ No newline at end of file
+diff --git a/vendor/github.com/google/glog/src/base/commandlineflags.h b/vendor/github.com/google/glog/src/base/commandlineflags.h
+new file mode 100644
+index 000000000..c8d508902
+--- /dev/null
++++ b/vendor/github.com/google/glog/src/base/commandlineflags.h
+@@ -0,0 +1,133 @@
++// Copyright (c) 2008, Google Inc.
++// All rights reserved.
++// 
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are
++// met:
++// 
++//     * Redistributions of source code must retain the above copyright
++// notice, this list of conditions and the following disclaimer.
++//     * Redistributions in binary form must reproduce the above
++// copyright notice, this list of conditions and the following disclaimer
++// in the documentation and/or other materials provided with the
++// distribution.
++//     * Neither the name of Google Inc. nor the names of its
++// contributors may be used to endorse or promote products derived from
++// this software without specific prior written permission.
++// 
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++// ---
++// This file is a compatibility layer that defines Google's version of
++// command line flags that are used for configuration.
++//
++// We put flags into their own namespace.  It is purposefully
++// named in an opaque way that people should have trouble typing
++// directly.  The idea is that DEFINE puts the flag in the weird
++// namespace, and DECLARE imports the flag from there into the
++// current namespace.  The net result is to force people to use
++// DECLARE to get access to a flag, rather than saying
++//   extern bool FLAGS_logtostderr;
++// or some such instead.  We want this so we can put extra
++// functionality (like sanity-checking) in DECLARE if we want,
++// and make sure it is picked up everywhere.
++//
++// We also put the type of the variable in the namespace, so that
++// people can't DECLARE_int32 something that they DEFINE_bool'd
++// elsewhere.
++#ifndef BASE_COMMANDLINEFLAGS_H__
++#define BASE_COMMANDLINEFLAGS_H__
++
++#include "config.h"
++#include <string>
++#include <string.h>               // for memchr
++#include <stdlib.h>               // for getenv
++
++#ifdef HAVE_LIB_GFLAGS
++
++#include <gflags/gflags.h>
++
++#else
++
++#include "glog/logging.h"
++
++#define DECLARE_VARIABLE(type, shorttype, name, tn)                     \
++  namespace fL##shorttype {                                             \
++    extern GOOGLE_GLOG_DLL_DECL type FLAGS_##name;                      \
++  }                                                                     \
++  using fL##shorttype::FLAGS_##name
++#define DEFINE_VARIABLE(type, shorttype, name, value, meaning, tn)      \
++  namespace fL##shorttype {                                             \
++    GOOGLE_GLOG_DLL_DECL type FLAGS_##name(value);                      \
++    char FLAGS_no##name;                                                \
++  }                                                                     \
++  using fL##shorttype::FLAGS_##name
++
++// bool specialization
++#define DECLARE_bool(name) \
++  DECLARE_VARIABLE(bool, B, name, bool)
++#define DEFINE_bool(name, value, meaning) \
++  DEFINE_VARIABLE(bool, B, name, value, meaning, bool)
++
++// int32 specialization
++#define DECLARE_int32(name) \
++  DECLARE_VARIABLE(GOOGLE_NAMESPACE::int32, I, name, int32)
++#define DEFINE_int32(name, value, meaning) \
++  DEFINE_VARIABLE(GOOGLE_NAMESPACE::int32, I, name, value, meaning, int32)
++
++// Special case for string, because we have to specify the namespace
++// std::string, which doesn't play nicely with our FLAG__namespace hackery.
++#define DECLARE_string(name)                                            \
++  namespace fLS {                                                       \
++    extern GOOGLE_GLOG_DLL_DECL std::string& FLAGS_##name;              \
++  }                                                                     \
++  using fLS::FLAGS_##name
++#define DEFINE_string(name, value, meaning)                             \
++  namespace fLS {                                                       \
++    std::string FLAGS_##name##_buf(value);                              \
++    GOOGLE_GLOG_DLL_DECL std::string& FLAGS_##name = FLAGS_##name##_buf; \
++    char FLAGS_no##name;                                                \
++  }                                                                     \
++  using fLS::FLAGS_##name
++
++#endif  // HAVE_LIB_GFLAGS
++
++// Define GLOG_DEFINE_* using DEFINE_* . By using these macros, we
++// have GLOG_* environ variables even if we have gflags installed.
++//
++// If both an environment variable and a flag are specified, the value
++// specified by a flag wins. E.g., if GLOG_v=0 and --v=1, the
++// verbosity will be 1, not 0.
++
++#define GLOG_DEFINE_bool(name, value, meaning) \
++  DEFINE_bool(name, EnvToBool("GLOG_" #name, value), meaning)
++
++#define GLOG_DEFINE_int32(name, value, meaning) \
++  DEFINE_int32(name, EnvToInt("GLOG_" #name, value), meaning)
++
++#define GLOG_DEFINE_string(name, value, meaning) \
++  DEFINE_string(name, EnvToString("GLOG_" #name, value), meaning)
++
++// These macros (could be functions, but I don't want to bother with a .cc
++// file), make it easier to initialize flags from the environment.
++
++#define EnvToString(envname, dflt)   \
++  (!getenv(envname) ? (dflt) : getenv(envname))
++
++#define EnvToBool(envname, dflt)   \
++  (!getenv(envname) ? (dflt) : memchr("tTyY1\0", getenv(envname)[0], 6) != NULL)
++
++#define EnvToInt(envname, dflt)  \
++  (!getenv(envname) ? (dflt) : strtol(getenv(envname), NULL, 10))
++
++#endif  // BASE_COMMANDLINEFLAGS_H__
+diff --git a/vendor/github.com/google/glog/src/base/googleinit.h b/vendor/github.com/google/glog/src/base/googleinit.h
+new file mode 100644
+index 000000000..5a8b515cd
+--- /dev/null
++++ b/vendor/github.com/google/glog/src/base/googleinit.h
+@@ -0,0 +1,51 @@
++// Copyright (c) 2008, Google Inc.
++// All rights reserved.
++// 
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are
++// met:
++// 
++//     * Redistributions of source code must retain the above copyright
++// notice, this list of conditions and the following disclaimer.
++//     * Redistributions in binary form must reproduce the above
++// copyright notice, this list of conditions and the following disclaimer
++// in the documentation and/or other materials provided with the
++// distribution.
++//     * Neither the name of Google Inc. nor the names of its
++// contributors may be used to endorse or promote products derived from
++// this software without specific prior written permission.
++// 
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++// ---
++// Author: Jacob Hoffman-Andrews
++
++#ifndef _GOOGLEINIT_H
++#define _GOOGLEINIT_H
++
++class GoogleInitializer {
++ public:
++  typedef void (*void_function)(void);
++  GoogleInitializer(const char*, void_function f) {
++    f();
++  }
++};
++
++#define REGISTER_MODULE_INITIALIZER(name, body)                 \
++  namespace {                                                   \
++    static void google_init_module_##name () { body; }          \
++    GoogleInitializer google_initializer_module_##name(#name,   \
++            google_init_module_##name);                         \
++  }
++
++#endif /* _GOOGLEINIT_H */
+diff --git a/vendor/github.com/google/glog/src/base/mutex.h b/vendor/github.com/google/glog/src/base/mutex.h
+new file mode 100644
+index 000000000..ced2b9950
+--- /dev/null
++++ b/vendor/github.com/google/glog/src/base/mutex.h
+@@ -0,0 +1,333 @@
++// Copyright (c) 2007, Google Inc.
++// All rights reserved.
++// 
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are
++// met:
++// 
++//     * Redistributions of source code must retain the above copyright
++// notice, this list of conditions and the following disclaimer.
++//     * Redistributions in binary form must reproduce the above
++// copyright notice, this list of conditions and the following disclaimer
++// in the documentation and/or other materials provided with the
++// distribution.
++//     * Neither the name of Google Inc. nor the names of its
++// contributors may be used to endorse or promote products derived from
++// this software without specific prior written permission.
++// 
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++// 
++// ---
++// Author: Craig Silverstein.
++//
++// A simple mutex wrapper, supporting locks and read-write locks.
++// You should assume the locks are *not* re-entrant.
++//
++// To use: you should define the following macros in your configure.ac:
++//   ACX_PTHREAD
++//   AC_RWLOCK
++// The latter is defined in ../autoconf.
++//
++// This class is meant to be internal-only and should be wrapped by an
++// internal namespace.  Before you use this module, please give the
++// name of your internal namespace for this module.  Or, if you want
++// to expose it, you'll want to move it to the Google namespace.  We
++// cannot put this class in global namespace because there can be some
++// problems when we have multiple versions of Mutex in each shared object.
++//
++// NOTE: by default, we have #ifdef'ed out the TryLock() method.
++//       This is for two reasons:
++// 1) TryLock() under Windows is a bit annoying (it requires a
++//    #define to be defined very early).
++// 2) TryLock() is broken for NO_THREADS mode, at least in NDEBUG
++//    mode.
++// If you need TryLock(), and either these two caveats are not a
++// problem for you, or you're willing to work around them, then
++// feel free to #define GMUTEX_TRYLOCK, or to remove the #ifdefs
++// in the code below.
++//
++// CYGWIN NOTE: Cygwin support for rwlock seems to be buggy:
++//    http://www.cygwin.com/ml/cygwin/2008-12/msg00017.html
++// Because of that, we might as well use windows locks for
++// cygwin.  They seem to be more reliable than the cygwin pthreads layer.
++//
++// TRICKY IMPLEMENTATION NOTE:
++// This class is designed to be safe to use during
++// dynamic-initialization -- that is, by global constructors that are
++// run before main() starts.  The issue in this case is that
++// dynamic-initialization happens in an unpredictable order, and it
++// could be that someone else's dynamic initializer could call a
++// function that tries to acquire this mutex -- but that all happens
++// before this mutex's constructor has run.  (This can happen even if
++// the mutex and the function that uses the mutex are in the same .cc
++// file.)  Basically, because Mutex does non-trivial work in its
++// constructor, it's not, in the naive implementation, safe to use
++// before dynamic initialization has run on it.
++//
++// The solution used here is to pair the actual mutex primitive with a
++// bool that is set to true when the mutex is dynamically initialized.
++// (Before that it's false.)  Then we modify all mutex routines to
++// look at the bool, and not try to lock/unlock until the bool makes
++// it to true (which happens after the Mutex constructor has run.)
++//
++// This works because before main() starts -- particularly, during
++// dynamic initialization -- there are no threads, so a) it's ok that
++// the mutex operations are a no-op, since we don't need locking then
++// anyway; and b) we can be quite confident our bool won't change
++// state between a call to Lock() and a call to Unlock() (that would
++// require a global constructor in one translation unit to call Lock()
++// and another global constructor in another translation unit to call
++// Unlock() later, which is pretty perverse).
++//
++// That said, it's tricky, and can conceivably fail; it's safest to
++// avoid trying to acquire a mutex in a global constructor, if you
++// can.  One way it can fail is that a really smart compiler might
++// initialize the bool to true at static-initialization time (too
++// early) rather than at dynamic-initialization time.  To discourage
++// that, we set is_safe_ to true in code (not the constructor
++// colon-initializer) and set it to true via a function that always
++// evaluates to true, but that the compiler can't know always
++// evaluates to true.  This should be good enough.
++
++#ifndef GOOGLE_MUTEX_H_
++#define GOOGLE_MUTEX_H_
++
++#include "config.h"           // to figure out pthreads support
++
++#if defined(NO_THREADS)
++  typedef int MutexType;      // to keep a lock-count
++#elif defined(_WIN32) || defined(__CYGWIN32__) || defined(__CYGWIN64__)
++# ifndef WIN32_LEAN_AND_MEAN
++#  define WIN32_LEAN_AND_MEAN  // We only need minimal includes
++# endif
++# ifdef GMUTEX_TRYLOCK
++  // We need Windows NT or later for TryEnterCriticalSection().  If you
++  // don't need that functionality, you can remove these _WIN32_WINNT
++  // lines, and change TryLock() to assert(0) or something.
++#   ifndef _WIN32_WINNT
++#     define _WIN32_WINNT 0x0400
++#   endif
++# endif
++// To avoid macro definition of ERROR.
++# ifndef NOGDI
++#  define NOGDI
++# endif
++// To avoid macro definition of min/max.
++# ifndef NOMINMAX
++#  define NOMINMAX
++# endif
++# include <windows.h>
++  typedef CRITICAL_SECTION MutexType;
++#elif defined(HAVE_PTHREAD) && defined(HAVE_RWLOCK)
++  // Needed for pthread_rwlock_*.  If it causes problems, you could take it
++  // out, but then you'd have to unset HAVE_RWLOCK (at least on linux -- it
++  // *does* cause problems for FreeBSD, or MacOSX, but isn't needed
++  // for locking there.)
++# ifdef __linux__
++#   ifndef _XOPEN_SOURCE  // Some other header might have already set it for us.
++#     define _XOPEN_SOURCE 500  // may be needed to get the rwlock calls
++#   endif
++# endif
++# include <pthread.h>
++  typedef pthread_rwlock_t MutexType;
++#elif defined(HAVE_PTHREAD)
++# include <pthread.h>
++  typedef pthread_mutex_t MutexType;
++#else
++# error Need to implement mutex.h for your architecture, or #define NO_THREADS
++#endif
++
++// We need to include these header files after defining _XOPEN_SOURCE
++// as they may define the _XOPEN_SOURCE macro.
++#include <assert.h>
++#include <stdlib.h>      // for abort()
++
++#define MUTEX_NAMESPACE glog_internal_namespace_
++
++namespace MUTEX_NAMESPACE {
++
++class Mutex {
++ public:
++  // Create a Mutex that is not held by anybody.  This constructor is
++  // typically used for Mutexes allocated on the heap or the stack.
++  // See below for a recommendation for constructing global Mutex
++  // objects.
++  inline Mutex();
++
++  // Destructor
++  inline ~Mutex();
++
++  inline void Lock();    // Block if needed until free then acquire exclusively
++  inline void Unlock();  // Release a lock acquired via Lock()
++#ifdef GMUTEX_TRYLOCK
++  inline bool TryLock(); // If free, Lock() and return true, else return false
++#endif
++  // Note that on systems that don't support read-write locks, these may
++  // be implemented as synonyms to Lock() and Unlock().  So you can use
++  // these for efficiency, but don't use them anyplace where being able
++  // to do shared reads is necessary to avoid deadlock.
++  inline void ReaderLock();   // Block until free or shared then acquire a share
++  inline void ReaderUnlock(); // Release a read share of this Mutex
++  inline void WriterLock() { Lock(); }     // Acquire an exclusive lock
++  inline void WriterUnlock() { Unlock(); } // Release a lock from WriterLock()
++
++  // TODO(hamaji): Do nothing, implement correctly.
++  inline void AssertHeld() {}
++
++ private:
++  MutexType mutex_;
++  // We want to make sure that the compiler sets is_safe_ to true only
++  // when we tell it to, and never makes assumptions is_safe_ is
++  // always true.  volatile is the most reliable way to do that.
++  volatile bool is_safe_;
++
++  inline void SetIsSafe() { is_safe_ = true; }
++
++  // Catch the error of writing Mutex when intending MutexLock.
++  Mutex(Mutex* /*ignored*/) {}
++  // Disallow "evil" constructors
++  Mutex(const Mutex&);
++  void operator=(const Mutex&);
++};
++
++// Now the implementation of Mutex for various systems
++#if defined(NO_THREADS)
++
++// When we don't have threads, we can be either reading or writing,
++// but not both.  We can have lots of readers at once (in no-threads
++// mode, that's most likely to happen in recursive function calls),
++// but only one writer.  We represent this by having mutex_ be -1 when
++// writing and a number > 0 when reading (and 0 when no lock is held).
++//
++// In debug mode, we assert these invariants, while in non-debug mode
++// we do nothing, for efficiency.  That's why everything is in an
++// assert.
++
++Mutex::Mutex() : mutex_(0) { }
++Mutex::~Mutex()            { assert(mutex_ == 0); }
++void Mutex::Lock()         { assert(--mutex_ == -1); }
++void Mutex::Unlock()       { assert(mutex_++ == -1); }
++#ifdef GMUTEX_TRYLOCK
++bool Mutex::TryLock()      { if (mutex_) return false; Lock(); return true; }
++#endif
++void Mutex::ReaderLock()   { assert(++mutex_ > 0); }
++void Mutex::ReaderUnlock() { assert(mutex_-- > 0); }
++
++#elif defined(_WIN32) || defined(__CYGWIN32__) || defined(__CYGWIN64__)
++
++Mutex::Mutex()             { InitializeCriticalSection(&mutex_); SetIsSafe(); }
++Mutex::~Mutex()            { DeleteCriticalSection(&mutex_); }
++void Mutex::Lock()         { if (is_safe_) EnterCriticalSection(&mutex_); }
++void Mutex::Unlock()       { if (is_safe_) LeaveCriticalSection(&mutex_); }
++#ifdef GMUTEX_TRYLOCK
++bool Mutex::TryLock()      { return is_safe_ ?
++                                 TryEnterCriticalSection(&mutex_) != 0 : true; }
++#endif
++void Mutex::ReaderLock()   { Lock(); }      // we don't have read-write locks
++void Mutex::ReaderUnlock() { Unlock(); }
++
++#elif defined(HAVE_PTHREAD) && defined(HAVE_RWLOCK)
++
++#define SAFE_PTHREAD(fncall)  do {   /* run fncall if is_safe_ is true */  \
++  if (is_safe_ && fncall(&mutex_) != 0) abort();                           \
++} while (0)
++
++Mutex::Mutex() {
++  SetIsSafe();
++  if (is_safe_ && pthread_rwlock_init(&mutex_, NULL) != 0) abort();
++}
++Mutex::~Mutex()            { SAFE_PTHREAD(pthread_rwlock_destroy); }
++void Mutex::Lock()         { SAFE_PTHREAD(pthread_rwlock_wrlock); }
++void Mutex::Unlock()       { SAFE_PTHREAD(pthread_rwlock_unlock); }
++#ifdef GMUTEX_TRYLOCK
++bool Mutex::TryLock()      { return is_safe_ ?
++                                    pthread_rwlock_trywrlock(&mutex_) == 0 :
++                                    true; }
++#endif
++void Mutex::ReaderLock()   { SAFE_PTHREAD(pthread_rwlock_rdlock); }
++void Mutex::ReaderUnlock() { SAFE_PTHREAD(pthread_rwlock_unlock); }
++#undef SAFE_PTHREAD
++
++#elif defined(HAVE_PTHREAD)
++
++#define SAFE_PTHREAD(fncall)  do {   /* run fncall if is_safe_ is true */  \
++  if (is_safe_ && fncall(&mutex_) != 0) abort();                           \
++} while (0)
++
++Mutex::Mutex()             {
++  SetIsSafe();
++  if (is_safe_ && pthread_mutex_init(&mutex_, NULL) != 0) abort();
++}
++Mutex::~Mutex()            { SAFE_PTHREAD(pthread_mutex_destroy); }
++void Mutex::Lock()         { SAFE_PTHREAD(pthread_mutex_lock); }
++void Mutex::Unlock()       { SAFE_PTHREAD(pthread_mutex_unlock); }
++#ifdef GMUTEX_TRYLOCK
++bool Mutex::TryLock()      { return is_safe_ ?
++                                 pthread_mutex_trylock(&mutex_) == 0 : true; }
++#endif
++void Mutex::ReaderLock()   { Lock(); }
++void Mutex::ReaderUnlock() { Unlock(); }
++#undef SAFE_PTHREAD
++
++#endif
++
++// --------------------------------------------------------------------------
++// Some helper classes
++
++// MutexLock(mu) acquires mu when constructed and releases it when destroyed.
++class MutexLock {
++ public:
++  explicit MutexLock(Mutex *mu) : mu_(mu) { mu_->Lock(); }
++  ~MutexLock() { mu_->Unlock(); }
++ private:
++  Mutex * const mu_;
++  // Disallow "evil" constructors
++  MutexLock(const MutexLock&);
++  void operator=(const MutexLock&);
++};
++
++// ReaderMutexLock and WriterMutexLock do the same, for rwlocks
++class ReaderMutexLock {
++ public:
++  explicit ReaderMutexLock(Mutex *mu) : mu_(mu) { mu_->ReaderLock(); }
++  ~ReaderMutexLock() { mu_->ReaderUnlock(); }
++ private:
++  Mutex * const mu_;
++  // Disallow "evil" constructors
++  ReaderMutexLock(const ReaderMutexLock&);
++  void operator=(const ReaderMutexLock&);
++};
++
++class WriterMutexLock {
++ public:
++  explicit WriterMutexLock(Mutex *mu) : mu_(mu) { mu_->WriterLock(); }
++  ~WriterMutexLock() { mu_->WriterUnlock(); }
++ private:
++  Mutex * const mu_;
++  // Disallow "evil" constructors
++  WriterMutexLock(const WriterMutexLock&);
++  void operator=(const WriterMutexLock&);
++};
++
++// Catch bug where variable name is omitted, e.g. MutexLock (&mu);
++#define MutexLock(x) COMPILE_ASSERT(0, mutex_lock_decl_missing_var_name)
++#define ReaderMutexLock(x) COMPILE_ASSERT(0, rmutex_lock_decl_missing_var_name)
++#define WriterMutexLock(x) COMPILE_ASSERT(0, wmutex_lock_decl_missing_var_name)
++
++}  // namespace MUTEX_NAMESPACE
++
++using namespace MUTEX_NAMESPACE;
++
++#undef MUTEX_NAMESPACE
++
++#endif  /* #define GOOGLE_MUTEX_H__ */
+diff --git a/vendor/github.com/google/glog/src/glog/log_severity.h b/vendor/github.com/google/glog/src/glog/log_severity.h
+new file mode 100644
+index 000000000..99945a426
+--- /dev/null
++++ b/vendor/github.com/google/glog/src/glog/log_severity.h
+@@ -0,0 +1,92 @@
++// Copyright (c) 2007, Google Inc.
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are
++// met:
++//
++//     * Redistributions of source code must retain the above copyright
++// notice, this list of conditions and the following disclaimer.
++//     * Redistributions in binary form must reproduce the above
++// copyright notice, this list of conditions and the following disclaimer
++// in the documentation and/or other materials provided with the
++// distribution.
++//     * Neither the name of Google Inc. nor the names of its
++// contributors may be used to endorse or promote products derived from
++// this software without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++#ifndef BASE_LOG_SEVERITY_H__
++#define BASE_LOG_SEVERITY_H__
++
++// Annoying stuff for windows -- makes sure clients can import these functions
++#ifndef GOOGLE_GLOG_DLL_DECL
++# if defined(_WIN32) && !defined(__CYGWIN__)
++#   define GOOGLE_GLOG_DLL_DECL  __declspec(dllimport)
++# else
++#   define GOOGLE_GLOG_DLL_DECL
++# endif
++#endif
++
++// Variables of type LogSeverity are widely taken to lie in the range
++// [0, NUM_SEVERITIES-1].  Be careful to preserve this assumption if
++// you ever need to change their values or add a new severity.
++typedef int LogSeverity;
++
++const int GLOG_INFO = 0, GLOG_WARNING = 1, GLOG_ERROR = 2, GLOG_FATAL = 3,
++  NUM_SEVERITIES = 4;
++#ifndef GLOG_NO_ABBREVIATED_SEVERITIES
++# ifdef ERROR
++#  error ERROR macro is defined. Define GLOG_NO_ABBREVIATED_SEVERITIES before including logging.h. See the document for detail.
++# endif
++const int INFO = GLOG_INFO, WARNING = GLOG_WARNING,
++  ERROR = GLOG_ERROR, FATAL = GLOG_FATAL;
++#endif
++
++// DFATAL is FATAL in debug mode, ERROR in normal mode
++#ifdef NDEBUG
++#define DFATAL_LEVEL ERROR
++#else
++#define DFATAL_LEVEL FATAL
++#endif
++
++extern GOOGLE_GLOG_DLL_DECL const char* const LogSeverityNames[NUM_SEVERITIES];
++
++// NDEBUG usage helpers related to (RAW_)DCHECK:
++//
++// DEBUG_MODE is for small !NDEBUG uses like
++//   if (DEBUG_MODE) foo.CheckThatFoo();
++// instead of substantially more verbose
++//   #ifndef NDEBUG
++//     foo.CheckThatFoo();
++//   #endif
++//
++// IF_DEBUG_MODE is for small !NDEBUG uses like
++//   IF_DEBUG_MODE( string error; )
++//   DCHECK(Foo(&error)) << error;
++// instead of substantially more verbose
++//   #ifndef NDEBUG
++//     string error;
++//     DCHECK(Foo(&error)) << error;
++//   #endif
++//
++#ifdef NDEBUG
++enum { DEBUG_MODE = 0 };
++#define IF_DEBUG_MODE(x)
++#else
++enum { DEBUG_MODE = 1 };
++#define IF_DEBUG_MODE(x) x
++#endif
++
++#endif  // BASE_LOG_SEVERITY_H__
+diff --git a/vendor/github.com/google/glog/src/windows/glog/log_severity.h b/vendor/github.com/google/glog/src/windows/glog/log_severity.h
+new file mode 100644
+index 000000000..22a4191ab
+--- /dev/null
++++ b/vendor/github.com/google/glog/src/windows/glog/log_severity.h
+@@ -0,0 +1,96 @@
++// This file is automatically generated from src/glog/log_severity.h
++// using src/windows/preprocess.sh.
++// DO NOT EDIT!
++
++// Copyright (c) 2007, Google Inc.
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are
++// met:
++//
++//     * Redistributions of source code must retain the above copyright
++// notice, this list of conditions and the following disclaimer.
++//     * Redistributions in binary form must reproduce the above
++// copyright notice, this list of conditions and the following disclaimer
++// in the documentation and/or other materials provided with the
++// distribution.
++//     * Neither the name of Google Inc. nor the names of its
++// contributors may be used to endorse or promote products derived from
++// this software without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++#ifndef BASE_LOG_SEVERITY_H__
++#define BASE_LOG_SEVERITY_H__
++
++// Annoying stuff for windows -- makes sure clients can import these functions
++#ifndef GOOGLE_GLOG_DLL_DECL
++# if defined(_WIN32) && !defined(__CYGWIN__)
++#   define GOOGLE_GLOG_DLL_DECL  __declspec(dllimport)
++# else
++#   define GOOGLE_GLOG_DLL_DECL
++# endif
++#endif
++
++// Variables of type LogSeverity are widely taken to lie in the range
++// [0, NUM_SEVERITIES-1].  Be careful to preserve this assumption if
++// you ever need to change their values or add a new severity.
++typedef int LogSeverity;
++
++const int GLOG_INFO = 0, GLOG_WARNING = 1, GLOG_ERROR = 2, GLOG_FATAL = 3,
++  NUM_SEVERITIES = 4;
++#ifndef GLOG_NO_ABBREVIATED_SEVERITIES
++# ifdef ERROR
++#  error ERROR macro is defined. Define GLOG_NO_ABBREVIATED_SEVERITIES before including logging.h. See the document for detail.
++# endif
++const int INFO = GLOG_INFO, WARNING = GLOG_WARNING,
++  ERROR = GLOG_ERROR, FATAL = GLOG_FATAL;
++#endif
++
++// DFATAL is FATAL in debug mode, ERROR in normal mode
++#ifdef NDEBUG
++#define DFATAL_LEVEL ERROR
++#else
++#define DFATAL_LEVEL FATAL
++#endif
++
++extern GOOGLE_GLOG_DLL_DECL const char* const LogSeverityNames[NUM_SEVERITIES];
++
++// NDEBUG usage helpers related to (RAW_)DCHECK:
++//
++// DEBUG_MODE is for small !NDEBUG uses like
++//   if (DEBUG_MODE) foo.CheckThatFoo();
++// instead of substantially more verbose
++//   #ifndef NDEBUG
++//     foo.CheckThatFoo();
++//   #endif
++//
++// IF_DEBUG_MODE is for small !NDEBUG uses like
++//   IF_DEBUG_MODE( string error; )
++//   DCHECK(Foo(&error)) << error;
++// instead of substantially more verbose
++//   #ifndef NDEBUG
++//     string error;
++//     DCHECK(Foo(&error)) << error;
++//   #endif
++//
++#ifdef NDEBUG
++enum { DEBUG_MODE = 0 };
++#define IF_DEBUG_MODE(x)
++#else
++enum { DEBUG_MODE = 1 };
++#define IF_DEBUG_MODE(x) x
++#endif
++
++#endif  // BASE_LOG_SEVERITY_H__
+diff --git a/vendor/github.com/google/glog/src/windows/glog/logging.h b/vendor/github.com/google/glog/src/windows/glog/logging.h
+new file mode 100755
+index 000000000..2a739f9d8
+--- /dev/null
++++ b/vendor/github.com/google/glog/src/windows/glog/logging.h
+@@ -0,0 +1,1689 @@
++// This file is automatically generated from src/glog/logging.h.in
++// using src/windows/preprocess.sh.
++// DO NOT EDIT!
++
++// Copyright (c) 1999, Google Inc.
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are
++// met:
++//
++//     * Redistributions of source code must retain the above copyright
++// notice, this list of conditions and the following disclaimer.
++//     * Redistributions in binary form must reproduce the above
++// copyright notice, this list of conditions and the following disclaimer
++// in the documentation and/or other materials provided with the
++// distribution.
++//     * Neither the name of Google Inc. nor the names of its
++// contributors may be used to endorse or promote products derived from
++// this software without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++//
++// Author: Ray Sidney
++//
++// This file contains #include information about logging-related stuff.
++// Pretty much everybody needs to #include this file so that they can
++// log various happenings.
++//
++#ifndef _LOGGING_H_
++#define _LOGGING_H_
++
++#include <errno.h>
++#include <string.h>
++#include <time.h>
++#include <iosfwd>
++#include <ostream>
++#include <sstream>
++#include <string>
++#if 0
++# include <unistd.h>
++#endif
++#include <vector>
++
++#if defined(_MSC_VER)
++#define GLOG_MSVC_PUSH_DISABLE_WARNING(n) __pragma(warning(push)) \
++                                     __pragma(warning(disable:n))
++#define GLOG_MSVC_POP_WARNING() __pragma(warning(pop))
++#else
++#define GLOG_MSVC_PUSH_DISABLE_WARNING(n)
++#define GLOG_MSVC_POP_WARNING()
++#endif
++
++// Annoying stuff for windows -- makes sure clients can import these functions
++#ifndef GOOGLE_GLOG_DLL_DECL
++# if defined(_WIN32) && !defined(__CYGWIN__)
++#   define GOOGLE_GLOG_DLL_DECL  __declspec(dllimport)
++# else
++#   define GOOGLE_GLOG_DLL_DECL
++# endif
++#endif
++
++// We care a lot about number of bits things take up.  Unfortunately,
++// systems define their bit-specific ints in a lot of different ways.
++// We use our own way, and have a typedef to get there.
++// Note: these commands below may look like "#if 1" or "#if 0", but
++// that's because they were constructed that way at ./configure time.
++// Look at logging.h.in to see how they're calculated (based on your config).
++#if 0
++#include <stdint.h>             // the normal place uint16_t is defined
++#endif
++#if 0
++#include <sys/types.h>          // the normal place u_int16_t is defined
++#endif
++#if 0
++#include <inttypes.h>           // a third place for uint16_t or u_int16_t
++#endif
++
++#if 0
++#include <gflags/gflags.h>
++#endif
++
++namespace google {
++
++#if 0      // the C99 format
++typedef int32_t int32;
++typedef uint32_t uint32;
++typedef int64_t int64;
++typedef uint64_t uint64;
++#elif 0   // the BSD format
++typedef int32_t int32;
++typedef u_int32_t uint32;
++typedef int64_t int64;
++typedef u_int64_t uint64;
++#elif 1    // the windows (vc7) format
++typedef __int32 int32;
++typedef unsigned __int32 uint32;
++typedef __int64 int64;
++typedef unsigned __int64 uint64;
++#else
++#error Do not know how to define a 32-bit integer quantity on your system
++#endif
++
++}
++
++// The global value of GOOGLE_STRIP_LOG. All the messages logged to
++// LOG(XXX) with severity less than GOOGLE_STRIP_LOG will not be displayed.
++// If it can be determined at compile time that the message will not be
++// printed, the statement will be compiled out.
++//
++// Example: to strip out all INFO and WARNING messages, use the value
++// of 2 below. To make an exception for WARNING messages from a single
++// file, add "#define GOOGLE_STRIP_LOG 1" to that file _before_ including
++// base/logging.h
++#ifndef GOOGLE_STRIP_LOG
++#define GOOGLE_STRIP_LOG 0
++#endif
++
++// GCC can be told that a certain branch is not likely to be taken (for
++// instance, a CHECK failure), and use that information in static analysis.
++// Giving it this information can help it optimize for the common case in
++// the absence of better information (ie. -fprofile-arcs).
++//
++#ifndef GOOGLE_PREDICT_BRANCH_NOT_TAKEN
++#if 0
++#define GOOGLE_PREDICT_BRANCH_NOT_TAKEN(x) (__builtin_expect(x, 0))
++#else
++#define GOOGLE_PREDICT_BRANCH_NOT_TAKEN(x) x
++#endif
++#endif
++
++#ifndef GOOGLE_PREDICT_FALSE
++#if 0
++#define GOOGLE_PREDICT_FALSE(x) (__builtin_expect(x, 0))
++#else
++#define GOOGLE_PREDICT_FALSE(x) x
++#endif
++#endif
++
++#ifndef GOOGLE_PREDICT_TRUE
++#if 0
++#define GOOGLE_PREDICT_TRUE(x) (__builtin_expect(!!(x), 1))
++#else
++#define GOOGLE_PREDICT_TRUE(x) x
++#endif
++#endif
++
++
++// Make a bunch of macros for logging.  The way to log things is to stream
++// things to LOG(<a particular severity level>).  E.g.,
++//
++//   LOG(INFO) << "Found " << num_cookies << " cookies";
++//
++// You can capture log messages in a string, rather than reporting them
++// immediately:
++//
++//   vector<string> errors;
++//   LOG_STRING(ERROR, &errors) << "Couldn't parse cookie #" << cookie_num;
++//
++// This pushes back the new error onto 'errors'; if given a NULL pointer,
++// it reports the error via LOG(ERROR).
++//
++// You can also do conditional logging:
++//
++//   LOG_IF(INFO, num_cookies > 10) << "Got lots of cookies";
++//
++// You can also do occasional logging (log every n'th occurrence of an
++// event):
++//
++//   LOG_EVERY_N(INFO, 10) << "Got the " << google::COUNTER << "th cookie";
++//
++// The above will cause log messages to be output on the 1st, 11th, 21st, ...
++// times it is executed.  Note that the special google::COUNTER value is used
++// to identify which repetition is happening.
++//
++// You can also do occasional conditional logging (log every n'th
++// occurrence of an event, when condition is satisfied):
++//
++//   LOG_IF_EVERY_N(INFO, (size > 1024), 10) << "Got the " << google::COUNTER
++//                                           << "th big cookie";
++//
++// You can log messages the first N times your code executes a line. E.g.
++//
++//   LOG_FIRST_N(INFO, 20) << "Got the " << google::COUNTER << "th cookie";
++//
++// Outputs log messages for the first 20 times it is executed.
++//
++// Analogous SYSLOG, SYSLOG_IF, and SYSLOG_EVERY_N macros are available.
++// These log to syslog as well as to the normal logs.  If you use these at
++// all, you need to be aware that syslog can drastically reduce performance,
++// especially if it is configured for remote logging!  Don't use these
++// unless you fully understand this and have a concrete need to use them.
++// Even then, try to minimize your use of them.
++//
++// There are also "debug mode" logging macros like the ones above:
++//
++//   DLOG(INFO) << "Found cookies";
++//
++//   DLOG_IF(INFO, num_cookies > 10) << "Got lots of cookies";
++//
++//   DLOG_EVERY_N(INFO, 10) << "Got the " << google::COUNTER << "th cookie";
++//
++// All "debug mode" logging is compiled away to nothing for non-debug mode
++// compiles.
++//
++// We also have
++//
++//   LOG_ASSERT(assertion);
++//   DLOG_ASSERT(assertion);
++//
++// which is syntactic sugar for {,D}LOG_IF(FATAL, assert fails) << assertion;
++//
++// There are "verbose level" logging macros.  They look like
++//
++//   VLOG(1) << "I'm printed when you run the program with --v=1 or more";
++//   VLOG(2) << "I'm printed when you run the program with --v=2 or more";
++//
++// These always log at the INFO log level (when they log at all).
++// The verbose logging can also be turned on module-by-module.  For instance,
++//    --vmodule=mapreduce=2,file=1,gfs*=3 --v=0
++// will cause:
++//   a. VLOG(2) and lower messages to be printed from mapreduce.{h,cc}
++//   b. VLOG(1) and lower messages to be printed from file.{h,cc}
++//   c. VLOG(3) and lower messages to be printed from files prefixed with "gfs"
++//   d. VLOG(0) and lower messages to be printed from elsewhere
++//
++// The wildcarding functionality shown by (c) supports both '*' (match
++// 0 or more characters) and '?' (match any single character) wildcards.
++//
++// There's also VLOG_IS_ON(n) "verbose level" condition macro. To be used as
++//
++//   if (VLOG_IS_ON(2)) {
++//     // do some logging preparation and logging
++//     // that can't be accomplished with just VLOG(2) << ...;
++//   }
++//
++// There are also VLOG_IF, VLOG_EVERY_N and VLOG_IF_EVERY_N "verbose level"
++// condition macros for sample cases, when some extra computation and
++// preparation for logs is not needed.
++//   VLOG_IF(1, (size > 1024))
++//      << "I'm printed when size is more than 1024 and when you run the "
++//         "program with --v=1 or more";
++//   VLOG_EVERY_N(1, 10)
++//      << "I'm printed every 10th occurrence, and when you run the program "
++//         "with --v=1 or more. Present occurence is " << google::COUNTER;
++//   VLOG_IF_EVERY_N(1, (size > 1024), 10)
++//      << "I'm printed on every 10th occurence of case when size is more "
++//         " than 1024, when you run the program with --v=1 or more. ";
++//         "Present occurence is " << google::COUNTER;
++//
++// The supported severity levels for macros that allow you to specify one
++// are (in increasing order of severity) INFO, WARNING, ERROR, and FATAL.
++// Note that messages of a given severity are logged not only in the
++// logfile for that severity, but also in all logfiles of lower severity.
++// E.g., a message of severity FATAL will be logged to the logfiles of
++// severity FATAL, ERROR, WARNING, and INFO.
++//
++// There is also the special severity of DFATAL, which logs FATAL in
++// debug mode, ERROR in normal mode.
++//
++// Very important: logging a message at the FATAL severity level causes
++// the program to terminate (after the message is logged).
++//
++// Unless otherwise specified, logs will be written to the filename
++// "<program name>.<hostname>.<user name>.log.<severity level>.", followed
++// by the date, time, and pid (you can't prevent the date, time, and pid
++// from being in the filename).
++//
++// The logging code takes two flags:
++//     --v=#           set the verbose level
++//     --logtostderr   log all the messages to stderr instead of to logfiles
++
++// LOG LINE PREFIX FORMAT
++//
++// Log lines have this form:
++//
++//     Lmmdd hh:mm:ss.uuuuuu threadid file:line] msg...
++//
++// where the fields are defined as follows:
++//
++//   L                A single character, representing the log level
++//                    (eg 'I' for INFO)
++//   mm               The month (zero padded; ie May is '05')
++//   dd               The day (zero padded)
++//   hh:mm:ss.uuuuuu  Time in hours, minutes and fractional seconds
++//   threadid         The space-padded thread ID as returned by GetTID()
++//                    (this matches the PID on Linux)
++//   file             The file name
++//   line             The line number
++//   msg              The user-supplied message
++//
++// Example:
++//
++//   I1103 11:57:31.739339 24395 google.cc:2341] Command line: ./some_prog
++//   I1103 11:57:31.739403 24395 google.cc:2342] Process id 24395
++//
++// NOTE: although the microseconds are useful for comparing events on
++// a single machine, clocks on different machines may not be well
++// synchronized.  Hence, use caution when comparing the low bits of
++// timestamps from different machines.
++
++#ifndef DECLARE_VARIABLE
++#define MUST_UNDEF_GFLAGS_DECLARE_MACROS
++#define DECLARE_VARIABLE(type, shorttype, name, tn)                     \
++  namespace fL##shorttype {                                             \
++    extern GOOGLE_GLOG_DLL_DECL type FLAGS_##name;                      \
++  }                                                                     \
++  using fL##shorttype::FLAGS_##name
++
++// bool specialization
++#define DECLARE_bool(name) \
++  DECLARE_VARIABLE(bool, B, name, bool)
++
++// int32 specialization
++#define DECLARE_int32(name) \
++  DECLARE_VARIABLE(google::int32, I, name, int32)
++
++// Special case for string, because we have to specify the namespace
++// std::string, which doesn't play nicely with our FLAG__namespace hackery.
++#define DECLARE_string(name)                                            \
++  namespace fLS {                                                       \
++    extern GOOGLE_GLOG_DLL_DECL std::string& FLAGS_##name;              \
++  }                                                                     \
++  using fLS::FLAGS_##name
++#endif
++
++// Set whether log messages go to stderr instead of logfiles
++DECLARE_bool(logtostderr);
++
++// Set whether log messages go to stderr in addition to logfiles.
++DECLARE_bool(alsologtostderr);
++
++// Set color messages logged to stderr (if supported by terminal).
++DECLARE_bool(colorlogtostderr);
++
++// Log messages at a level >= this flag are automatically sent to
++// stderr in addition to log files.
++DECLARE_int32(stderrthreshold);
++
++// Set whether the log prefix should be prepended to each line of output.
++DECLARE_bool(log_prefix);
++
++// Log messages at a level <= this flag are buffered.
++// Log messages at a higher level are flushed immediately.
++DECLARE_int32(logbuflevel);
++
++// Sets the maximum number of seconds which logs may be buffered for.
++DECLARE_int32(logbufsecs);
++
++// Log suppression level: messages logged at a lower level than this
++// are suppressed.
++DECLARE_int32(minloglevel);
++
++// If specified, logfiles are written into this directory instead of the
++// default logging directory.
++DECLARE_string(log_dir);
++
++// Set the log file mode.
++DECLARE_int32(logfile_mode);
++
++// Sets the path of the directory into which to put additional links
++// to the log files.
++DECLARE_string(log_link);
++
++DECLARE_int32(v);  // in vlog_is_on.cc
++
++// Sets the maximum log file size (in MB).
++DECLARE_int32(max_log_size);
++
++// Sets whether to avoid logging to the disk if the disk is full.
++DECLARE_bool(stop_logging_if_full_disk);
++
++#ifdef MUST_UNDEF_GFLAGS_DECLARE_MACROS
++#undef MUST_UNDEF_GFLAGS_DECLARE_MACROS
++#undef DECLARE_VARIABLE
++#undef DECLARE_bool
++#undef DECLARE_int32
++#undef DECLARE_string
++#endif
++
++// Log messages below the GOOGLE_STRIP_LOG level will be compiled away for
++// security reasons. See LOG(severtiy) below.
++
++// A few definitions of macros that don't generate much code.  Since
++// LOG(INFO) and its ilk are used all over our code, it's
++// better to have compact code for these operations.
++
++#if GOOGLE_STRIP_LOG == 0
++#define COMPACT_GOOGLE_LOG_INFO google::LogMessage( \
++      __FILE__, __LINE__)
++#define LOG_TO_STRING_INFO(message) google::LogMessage( \
++      __FILE__, __LINE__, google::GLOG_INFO, message)
++#else
++#define COMPACT_GOOGLE_LOG_INFO google::NullStream()
++#define LOG_TO_STRING_INFO(message) google::NullStream()
++#endif
++
++#if GOOGLE_STRIP_LOG <= 1
++#define COMPACT_GOOGLE_LOG_WARNING google::LogMessage( \
++      __FILE__, __LINE__, google::GLOG_WARNING)
++#define LOG_TO_STRING_WARNING(message) google::LogMessage( \
++      __FILE__, __LINE__, google::GLOG_WARNING, message)
++#else
++#define COMPACT_GOOGLE_LOG_WARNING google::NullStream()
++#define LOG_TO_STRING_WARNING(message) google::NullStream()
++#endif
++
++#if GOOGLE_STRIP_LOG <= 2
++#define COMPACT_GOOGLE_LOG_ERROR google::LogMessage( \
++      __FILE__, __LINE__, google::GLOG_ERROR)
++#define LOG_TO_STRING_ERROR(message) google::LogMessage( \
++      __FILE__, __LINE__, google::GLOG_ERROR, message)
++#else
++#define COMPACT_GOOGLE_LOG_ERROR google::NullStream()
++#define LOG_TO_STRING_ERROR(message) google::NullStream()
++#endif
++
++#if GOOGLE_STRIP_LOG <= 3
++#define COMPACT_GOOGLE_LOG_FATAL google::LogMessageFatal( \
++      __FILE__, __LINE__)
++#define LOG_TO_STRING_FATAL(message) google::LogMessage( \
++      __FILE__, __LINE__, google::GLOG_FATAL, message)
++#else
++#define COMPACT_GOOGLE_LOG_FATAL google::NullStreamFatal()
++#define LOG_TO_STRING_FATAL(message) google::NullStreamFatal()
++#endif
++
++#if defined(NDEBUG) && !defined(DCHECK_ALWAYS_ON)
++#define DCHECK_IS_ON() 0
++#else
++#define DCHECK_IS_ON() 1
++#endif
++
++// For DFATAL, we want to use LogMessage (as opposed to
++// LogMessageFatal), to be consistent with the original behavior.
++#if !DCHECK_IS_ON()
++#define COMPACT_GOOGLE_LOG_DFATAL COMPACT_GOOGLE_LOG_ERROR
++#elif GOOGLE_STRIP_LOG <= 3
++#define COMPACT_GOOGLE_LOG_DFATAL google::LogMessage( \
++      __FILE__, __LINE__, google::GLOG_FATAL)
++#else
++#define COMPACT_GOOGLE_LOG_DFATAL google::NullStreamFatal()
++#endif
++
++#define GOOGLE_LOG_INFO(counter) google::LogMessage(__FILE__, __LINE__, google::GLOG_INFO, counter, &google::LogMessage::SendToLog)
++#define SYSLOG_INFO(counter) \
++  google::LogMessage(__FILE__, __LINE__, google::GLOG_INFO, counter, \
++  &google::LogMessage::SendToSyslogAndLog)
++#define GOOGLE_LOG_WARNING(counter)  \
++  google::LogMessage(__FILE__, __LINE__, google::GLOG_WARNING, counter, \
++  &google::LogMessage::SendToLog)
++#define SYSLOG_WARNING(counter)  \
++  google::LogMessage(__FILE__, __LINE__, google::GLOG_WARNING, counter, \
++  &google::LogMessage::SendToSyslogAndLog)
++#define GOOGLE_LOG_ERROR(counter)  \
++  google::LogMessage(__FILE__, __LINE__, google::GLOG_ERROR, counter, \
++  &google::LogMessage::SendToLog)
++#define SYSLOG_ERROR(counter)  \
++  google::LogMessage(__FILE__, __LINE__, google::GLOG_ERROR, counter, \
++  &google::LogMessage::SendToSyslogAndLog)
++#define GOOGLE_LOG_FATAL(counter) \
++  google::LogMessage(__FILE__, __LINE__, google::GLOG_FATAL, counter, \
++  &google::LogMessage::SendToLog)
++#define SYSLOG_FATAL(counter) \
++  google::LogMessage(__FILE__, __LINE__, google::GLOG_FATAL, counter, \
++  &google::LogMessage::SendToSyslogAndLog)
++#define GOOGLE_LOG_DFATAL(counter) \
++  google::LogMessage(__FILE__, __LINE__, google::DFATAL_LEVEL, counter, \
++  &google::LogMessage::SendToLog)
++#define SYSLOG_DFATAL(counter) \
++  google::LogMessage(__FILE__, __LINE__, google::DFATAL_LEVEL, counter, \
++  &google::LogMessage::SendToSyslogAndLog)
++
++#if defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(__CYGWIN__) || defined(__CYGWIN32__)
++// A very useful logging macro to log windows errors:
++#define LOG_SYSRESULT(result) \
++  if (FAILED(HRESULT_FROM_WIN32(result))) { \
++    LPSTR message = NULL; \
++    LPSTR msg = reinterpret_cast<LPSTR>(&message); \
++    DWORD message_length = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | \
++                         FORMAT_MESSAGE_FROM_SYSTEM, \
++                         0, result, 0, msg, 100, NULL); \
++    if (message_length > 0) { \
++      google::LogMessage(__FILE__, __LINE__, google::GLOG_ERROR, 0, \
++          &google::LogMessage::SendToLog).stream() \
++          << reinterpret_cast<const char*>(message); \
++      LocalFree(message); \
++    } \
++  }
++#endif
++
++// We use the preprocessor's merging operator, "##", so that, e.g.,
++// LOG(INFO) becomes the token GOOGLE_LOG_INFO.  There's some funny
++// subtle difference between ostream member streaming functions (e.g.,
++// ostream::operator<<(int) and ostream non-member streaming functions
++// (e.g., ::operator<<(ostream&, string&): it turns out that it's
++// impossible to stream something like a string directly to an unnamed
++// ostream. We employ a neat hack by calling the stream() member
++// function of LogMessage which seems to avoid the problem.
++#define LOG(severity) COMPACT_GOOGLE_LOG_ ## severity.stream()
++#define SYSLOG(severity) SYSLOG_ ## severity(0).stream()
++
++namespace google {
++
++// They need the definitions of integer types.
++#include "glog/log_severity.h"
++#include "glog/vlog_is_on.h"
++
++// Initialize google's logging library. You will see the program name
++// specified by argv0 in log outputs.
++GOOGLE_GLOG_DLL_DECL void InitGoogleLogging(const char* argv0);
++
++// Shutdown google's logging library.
++GOOGLE_GLOG_DLL_DECL void ShutdownGoogleLogging();
++
++// Install a function which will be called after LOG(FATAL).
++GOOGLE_GLOG_DLL_DECL void InstallFailureFunction(void (*fail_func)());
++
++// Enable/Disable old log cleaner.
++GOOGLE_GLOG_DLL_DECL void EnableLogCleaner(int overdue_days);
++GOOGLE_GLOG_DLL_DECL void DisableLogCleaner();
++
++
++class LogSink;  // defined below
++
++// If a non-NULL sink pointer is given, we push this message to that sink.
++// For LOG_TO_SINK we then do normal LOG(severity) logging as well.
++// This is useful for capturing messages and passing/storing them
++// somewhere more specific than the global log of the process.
++// Argument types:
++//   LogSink* sink;
++//   LogSeverity severity;
++// The cast is to disambiguate NULL arguments.
++#define LOG_TO_SINK(sink, severity) \
++  google::LogMessage(                                    \
++      __FILE__, __LINE__,                                               \
++      google::GLOG_ ## severity,                         \
++      static_cast<google::LogSink*>(sink), true).stream()
++#define LOG_TO_SINK_BUT_NOT_TO_LOGFILE(sink, severity)                  \
++  google::LogMessage(                                    \
++      __FILE__, __LINE__,                                               \
++      google::GLOG_ ## severity,                         \
++      static_cast<google::LogSink*>(sink), false).stream()
++
++// If a non-NULL string pointer is given, we write this message to that string.
++// We then do normal LOG(severity) logging as well.
++// This is useful for capturing messages and storing them somewhere more
++// specific than the global log of the process.
++// Argument types:
++//   string* message;
++//   LogSeverity severity;
++// The cast is to disambiguate NULL arguments.
++// NOTE: LOG(severity) expands to LogMessage().stream() for the specified
++// severity.
++#define LOG_TO_STRING(severity, message) \
++  LOG_TO_STRING_##severity(static_cast<string*>(message)).stream()
++
++// If a non-NULL pointer is given, we push the message onto the end
++// of a vector of strings; otherwise, we report it with LOG(severity).
++// This is handy for capturing messages and perhaps passing them back
++// to the caller, rather than reporting them immediately.
++// Argument types:
++//   LogSeverity severity;
++//   vector<string> *outvec;
++// The cast is to disambiguate NULL arguments.
++#define LOG_STRING(severity, outvec) \
++  LOG_TO_STRING_##severity(static_cast<std::vector<std::string>*>(outvec)).stream()
++
++#define LOG_IF(severity, condition) \
++  static_cast<void>(0),             \
++  !(condition) ? (void) 0 : google::LogMessageVoidify() & LOG(severity)
++#define SYSLOG_IF(severity, condition) \
++  static_cast<void>(0),                \
++  !(condition) ? (void) 0 : google::LogMessageVoidify() & SYSLOG(severity)
++
++#define LOG_ASSERT(condition)  \
++  LOG_IF(FATAL, !(condition)) << "Assert failed: " #condition
++#define SYSLOG_ASSERT(condition) \
++  SYSLOG_IF(FATAL, !(condition)) << "Assert failed: " #condition
++
++// CHECK dies with a fatal error if condition is not true.  It is *not*
++// controlled by DCHECK_IS_ON(), so the check will be executed regardless of
++// compilation mode.  Therefore, it is safe to do things like:
++//    CHECK(fp->Write(x) == 4)
++#define CHECK(condition)  \
++      LOG_IF(FATAL, GOOGLE_PREDICT_BRANCH_NOT_TAKEN(!(condition))) \
++             << "Check failed: " #condition " "
++
++// A container for a string pointer which can be evaluated to a bool -
++// true iff the pointer is NULL.
++struct CheckOpString {
++  CheckOpString(std::string* str) : str_(str) { }
++  // No destructor: if str_ is non-NULL, we're about to LOG(FATAL),
++  // so there's no point in cleaning up str_.
++  operator bool() const {
++    return GOOGLE_PREDICT_BRANCH_NOT_TAKEN(str_ != NULL);
++  }
++  std::string* str_;
++};
++
++// Function is overloaded for integral types to allow static const
++// integrals declared in classes and not defined to be used as arguments to
++// CHECK* macros. It's not encouraged though.
++template <class T>
++inline const T&       GetReferenceableValue(const T&           t) { return t; }
++inline char           GetReferenceableValue(char               t) { return t; }
++inline unsigned char  GetReferenceableValue(unsigned char      t) { return t; }
++inline signed char    GetReferenceableValue(signed char        t) { return t; }
++inline short          GetReferenceableValue(short              t) { return t; }
++inline unsigned short GetReferenceableValue(unsigned short     t) { return t; }
++inline int            GetReferenceableValue(int                t) { return t; }
++inline unsigned int   GetReferenceableValue(unsigned int       t) { return t; }
++inline long           GetReferenceableValue(long               t) { return t; }
++inline unsigned long  GetReferenceableValue(unsigned long      t) { return t; }
++inline long long      GetReferenceableValue(long long          t) { return t; }
++inline unsigned long long GetReferenceableValue(unsigned long long t) {
++  return t;
++}
++
++// This is a dummy class to define the following operator.
++struct DummyClassToDefineOperator {};
++
++}
++
++// Define global operator<< to declare using ::operator<<.
++// This declaration will allow use to use CHECK macros for user
++// defined classes which have operator<< (e.g., stl_logging.h).
++inline std::ostream& operator<<(
++    std::ostream& out, const google::DummyClassToDefineOperator&) {
++  return out;
++}
++
++namespace google {
++
++// This formats a value for a failing CHECK_XX statement.  Ordinarily,
++// it uses the definition for operator<<, with a few special cases below.
++template <typename T>
++inline void MakeCheckOpValueString(std::ostream* os, const T& v) {
++  (*os) << v;
++}
++
++// Overrides for char types provide readable values for unprintable
++// characters.
++template <> GOOGLE_GLOG_DLL_DECL
++void MakeCheckOpValueString(std::ostream* os, const char& v);
++template <> GOOGLE_GLOG_DLL_DECL
++void MakeCheckOpValueString(std::ostream* os, const signed char& v);
++template <> GOOGLE_GLOG_DLL_DECL
++void MakeCheckOpValueString(std::ostream* os, const unsigned char& v);
++
++// Build the error message string. Specify no inlining for code size.
++template <typename T1, typename T2>
++std::string* MakeCheckOpString(const T1& v1, const T2& v2, const char* exprtext)
++    ;
++
++namespace base {
++namespace internal {
++
++// If "s" is less than base_logging::INFO, returns base_logging::INFO.
++// If "s" is greater than base_logging::FATAL, returns
++// base_logging::ERROR.  Otherwise, returns "s".
++LogSeverity NormalizeSeverity(LogSeverity s);
++
++}  // namespace internal
++
++// A helper class for formatting "expr (V1 vs. V2)" in a CHECK_XX
++// statement.  See MakeCheckOpString for sample usage.  Other
++// approaches were considered: use of a template method (e.g.,
++// base::BuildCheckOpString(exprtext, base::Print<T1>, &v1,
++// base::Print<T2>, &v2), however this approach has complications
++// related to volatile arguments and function-pointer arguments).
++class GOOGLE_GLOG_DLL_DECL CheckOpMessageBuilder {
++ public:
++  // Inserts "exprtext" and " (" to the stream.
++  explicit CheckOpMessageBuilder(const char *exprtext);
++  // Deletes "stream_".
++  ~CheckOpMessageBuilder();
++  // For inserting the first variable.
++  std::ostream* ForVar1() { return stream_; }
++  // For inserting the second variable (adds an intermediate " vs. ").
++  std::ostream* ForVar2();
++  // Get the result (inserts the closing ")").
++  std::string* NewString();
++
++ private:
++  std::ostringstream *stream_;
++};
++
++}  // namespace base
++
++template <typename T1, typename T2>
++std::string* MakeCheckOpString(const T1& v1, const T2& v2, const char* exprtext) {
++  base::CheckOpMessageBuilder comb(exprtext);
++  MakeCheckOpValueString(comb.ForVar1(), v1);
++  MakeCheckOpValueString(comb.ForVar2(), v2);
++  return comb.NewString();
++}
++
++// Helper functions for CHECK_OP macro.
++// The (int, int) specialization works around the issue that the compiler
++// will not instantiate the template version of the function on values of
++// unnamed enum type - see comment below.
++#define DEFINE_CHECK_OP_IMPL(name, op) \
++  template <typename T1, typename T2> \
++  inline std::string* name##Impl(const T1& v1, const T2& v2,    \
++                            const char* exprtext) { \
++    if (GOOGLE_PREDICT_TRUE(v1 op v2)) return NULL; \
++    else return MakeCheckOpString(v1, v2, exprtext); \
++  } \
++  inline std::string* name##Impl(int v1, int v2, const char* exprtext) { \
++    return name##Impl<int, int>(v1, v2, exprtext); \
++  }
++
++// We use the full name Check_EQ, Check_NE, etc. in case the file including
++// base/logging.h provides its own #defines for the simpler names EQ, NE, etc.
++// This happens if, for example, those are used as token names in a
++// yacc grammar.
++DEFINE_CHECK_OP_IMPL(Check_EQ, ==)  // Compilation error with CHECK_EQ(NULL, x)?
++DEFINE_CHECK_OP_IMPL(Check_NE, !=)  // Use CHECK(x == NULL) instead.
++DEFINE_CHECK_OP_IMPL(Check_LE, <=)
++DEFINE_CHECK_OP_IMPL(Check_LT, < )
++DEFINE_CHECK_OP_IMPL(Check_GE, >=)
++DEFINE_CHECK_OP_IMPL(Check_GT, > )
++#undef DEFINE_CHECK_OP_IMPL
++
++// Helper macro for binary operators.
++// Don't use this macro directly in your code, use CHECK_EQ et al below.
++
++#if defined(STATIC_ANALYSIS)
++// Only for static analysis tool to know that it is equivalent to assert
++#define CHECK_OP_LOG(name, op, val1, val2, log) CHECK((val1) op (val2))
++#elif DCHECK_IS_ON()
++// In debug mode, avoid constructing CheckOpStrings if possible,
++// to reduce the overhead of CHECK statments by 2x.
++// Real DCHECK-heavy tests have seen 1.5x speedups.
++
++// The meaning of "string" might be different between now and
++// when this macro gets invoked (e.g., if someone is experimenting
++// with other string implementations that get defined after this
++// file is included).  Save the current meaning now and use it
++// in the macro.
++typedef std::string _Check_string;
++#define CHECK_OP_LOG(name, op, val1, val2, log)                         \
++  while (google::_Check_string* _result =                \
++         google::Check##name##Impl(                      \
++             google::GetReferenceableValue(val1),        \
++             google::GetReferenceableValue(val2),        \
++             #val1 " " #op " " #val2))                                  \
++    log(__FILE__, __LINE__,                                             \
++        google::CheckOpString(_result)).stream()
++#else
++// In optimized mode, use CheckOpString to hint to compiler that
++// the while condition is unlikely.
++#define CHECK_OP_LOG(name, op, val1, val2, log)                         \
++  while (google::CheckOpString _result =                 \
++         google::Check##name##Impl(                      \
++             google::GetReferenceableValue(val1),        \
++             google::GetReferenceableValue(val2),        \
++             #val1 " " #op " " #val2))                                  \
++    log(__FILE__, __LINE__, _result).stream()
++#endif  // STATIC_ANALYSIS, DCHECK_IS_ON()
++
++#if GOOGLE_STRIP_LOG <= 3
++#define CHECK_OP(name, op, val1, val2) \
++  CHECK_OP_LOG(name, op, val1, val2, google::LogMessageFatal)
++#else
++#define CHECK_OP(name, op, val1, val2) \
++  CHECK_OP_LOG(name, op, val1, val2, google::NullStreamFatal)
++#endif // STRIP_LOG <= 3
++
++// Equality/Inequality checks - compare two values, and log a FATAL message
++// including the two values when the result is not as expected.  The values
++// must have operator<<(ostream, ...) defined.
++//
++// You may append to the error message like so:
++//   CHECK_NE(1, 2) << ": The world must be ending!";
++//
++// We are very careful to ensure that each argument is evaluated exactly
++// once, and that anything which is legal to pass as a function argument is
++// legal here.  In particular, the arguments may be temporary expressions
++// which will end up being destroyed at the end of the apparent statement,
++// for example:
++//   CHECK_EQ(string("abc")[1], 'b');
++//
++// WARNING: These don't compile correctly if one of the arguments is a pointer
++// and the other is NULL. To work around this, simply static_cast NULL to the
++// type of the desired pointer.
++
++#define CHECK_EQ(val1, val2) CHECK_OP(_EQ, ==, val1, val2)
++#define CHECK_NE(val1, val2) CHECK_OP(_NE, !=, val1, val2)
++#define CHECK_LE(val1, val2) CHECK_OP(_LE, <=, val1, val2)
++#define CHECK_LT(val1, val2) CHECK_OP(_LT, < , val1, val2)
++#define CHECK_GE(val1, val2) CHECK_OP(_GE, >=, val1, val2)
++#define CHECK_GT(val1, val2) CHECK_OP(_GT, > , val1, val2)
++
++// Check that the input is non NULL.  This very useful in constructor
++// initializer lists.
++
++#define CHECK_NOTNULL(val) \
++  google::CheckNotNull(__FILE__, __LINE__, "'" #val "' Must be non NULL", (val))
++
++// Helper functions for string comparisons.
++// To avoid bloat, the definitions are in logging.cc.
++#define DECLARE_CHECK_STROP_IMPL(func, expected) \
++  GOOGLE_GLOG_DLL_DECL std::string* Check##func##expected##Impl( \
++      const char* s1, const char* s2, const char* names);
++DECLARE_CHECK_STROP_IMPL(strcmp, true)
++DECLARE_CHECK_STROP_IMPL(strcmp, false)
++DECLARE_CHECK_STROP_IMPL(strcasecmp, true)
++DECLARE_CHECK_STROP_IMPL(strcasecmp, false)
++#undef DECLARE_CHECK_STROP_IMPL
++
++// Helper macro for string comparisons.
++// Don't use this macro directly in your code, use CHECK_STREQ et al below.
++#define CHECK_STROP(func, op, expected, s1, s2) \
++  while (google::CheckOpString _result = \
++         google::Check##func##expected##Impl((s1), (s2), \
++                                     #s1 " " #op " " #s2)) \
++    LOG(FATAL) << *_result.str_
++
++
++// String (char*) equality/inequality checks.
++// CASE versions are case-insensitive.
++//
++// Note that "s1" and "s2" may be temporary strings which are destroyed
++// by the compiler at the end of the current "full expression"
++// (e.g. CHECK_STREQ(Foo().c_str(), Bar().c_str())).
++
++#define CHECK_STREQ(s1, s2) CHECK_STROP(strcmp, ==, true, s1, s2)
++#define CHECK_STRNE(s1, s2) CHECK_STROP(strcmp, !=, false, s1, s2)
++#define CHECK_STRCASEEQ(s1, s2) CHECK_STROP(strcasecmp, ==, true, s1, s2)
++#define CHECK_STRCASENE(s1, s2) CHECK_STROP(strcasecmp, !=, false, s1, s2)
++
++#define CHECK_INDEX(I,A) CHECK(I < (sizeof(A)/sizeof(A[0])))
++#define CHECK_BOUND(B,A) CHECK(B <= (sizeof(A)/sizeof(A[0])))
++
++#define CHECK_DOUBLE_EQ(val1, val2)              \
++  do {                                           \
++    CHECK_LE((val1), (val2)+0.000000000000001L); \
++    CHECK_GE((val1), (val2)-0.000000000000001L); \
++  } while (0)
++
++#define CHECK_NEAR(val1, val2, margin)           \
++  do {                                           \
++    CHECK_LE((val1), (val2)+(margin));           \
++    CHECK_GE((val1), (val2)-(margin));           \
++  } while (0)
++
++// perror()..googly style!
++//
++// PLOG() and PLOG_IF() and PCHECK() behave exactly like their LOG* and
++// CHECK equivalents with the addition that they postpend a description
++// of the current state of errno to their output lines.
++
++#define PLOG(severity) GOOGLE_PLOG(severity, 0).stream()
++
++#define GOOGLE_PLOG(severity, counter)  \
++  google::ErrnoLogMessage( \
++      __FILE__, __LINE__, google::GLOG_ ## severity, counter, \
++      &google::LogMessage::SendToLog)
++
++#define PLOG_IF(severity, condition) \
++  static_cast<void>(0),              \
++  !(condition) ? (void) 0 : google::LogMessageVoidify() & PLOG(severity)
++
++// A CHECK() macro that postpends errno if the condition is false. E.g.
++//
++// if (poll(fds, nfds, timeout) == -1) { PCHECK(errno == EINTR); ... }
++#define PCHECK(condition)  \
++      PLOG_IF(FATAL, GOOGLE_PREDICT_BRANCH_NOT_TAKEN(!(condition))) \
++              << "Check failed: " #condition " "
++
++// A CHECK() macro that lets you assert the success of a function that
++// returns -1 and sets errno in case of an error. E.g.
++//
++// CHECK_ERR(mkdir(path, 0700));
++//
++// or
++//
++// int fd = open(filename, flags); CHECK_ERR(fd) << ": open " << filename;
++#define CHECK_ERR(invocation)                                          \
++PLOG_IF(FATAL, GOOGLE_PREDICT_BRANCH_NOT_TAKEN((invocation) == -1))    \
++        << #invocation
++
++// Use macro expansion to create, for each use of LOG_EVERY_N(), static
++// variables with the __LINE__ expansion as part of the variable name.
++#define LOG_EVERY_N_VARNAME(base, line) LOG_EVERY_N_VARNAME_CONCAT(base, line)
++#define LOG_EVERY_N_VARNAME_CONCAT(base, line) base ## line
++
++#define LOG_OCCURRENCES LOG_EVERY_N_VARNAME(occurrences_, __LINE__)
++#define LOG_OCCURRENCES_MOD_N LOG_EVERY_N_VARNAME(occurrences_mod_n_, __LINE__)
++
++#define SOME_KIND_OF_LOG_EVERY_N(severity, n, what_to_do) \
++  static int LOG_OCCURRENCES = 0, LOG_OCCURRENCES_MOD_N = 0; \
++  ++LOG_OCCURRENCES; \
++  if (++LOG_OCCURRENCES_MOD_N > n) LOG_OCCURRENCES_MOD_N -= n; \
++  if (LOG_OCCURRENCES_MOD_N == 1) \
++    google::LogMessage( \
++        __FILE__, __LINE__, google::GLOG_ ## severity, LOG_OCCURRENCES, \
++        &what_to_do).stream()
++
++#define SOME_KIND_OF_LOG_IF_EVERY_N(severity, condition, n, what_to_do) \
++  static int LOG_OCCURRENCES = 0, LOG_OCCURRENCES_MOD_N = 0; \
++  ++LOG_OCCURRENCES; \
++  if (condition && \
++      ((LOG_OCCURRENCES_MOD_N=(LOG_OCCURRENCES_MOD_N + 1) % n) == (1 % n))) \
++    google::LogMessage( \
++        __FILE__, __LINE__, google::GLOG_ ## severity, LOG_OCCURRENCES, \
++                 &what_to_do).stream()
++
++#define SOME_KIND_OF_PLOG_EVERY_N(severity, n, what_to_do) \
++  static int LOG_OCCURRENCES = 0, LOG_OCCURRENCES_MOD_N = 0; \
++  ++LOG_OCCURRENCES; \
++  if (++LOG_OCCURRENCES_MOD_N > n) LOG_OCCURRENCES_MOD_N -= n; \
++  if (LOG_OCCURRENCES_MOD_N == 1) \
++    google::ErrnoLogMessage( \
++        __FILE__, __LINE__, google::GLOG_ ## severity, LOG_OCCURRENCES, \
++        &what_to_do).stream()
++
++#define SOME_KIND_OF_LOG_FIRST_N(severity, n, what_to_do) \
++  static int LOG_OCCURRENCES = 0; \
++  if (LOG_OCCURRENCES <= n) \
++    ++LOG_OCCURRENCES; \
++  if (LOG_OCCURRENCES <= n) \
++    google::LogMessage( \
++        __FILE__, __LINE__, google::GLOG_ ## severity, LOG_OCCURRENCES, \
++        &what_to_do).stream()
++
++namespace glog_internal_namespace_ {
++template <bool>
++struct CompileAssert {
++};
++struct CrashReason;
++
++// Returns true if FailureSignalHandler is installed.
++// Needs to be exported since it's used by the signalhandler_unittest.
++GOOGLE_GLOG_DLL_DECL bool IsFailureSignalHandlerInstalled();
++}  // namespace glog_internal_namespace_
++
++#define LOG_EVERY_N(severity, n)                                        \
++  SOME_KIND_OF_LOG_EVERY_N(severity, (n), google::LogMessage::SendToLog)
++
++#define SYSLOG_EVERY_N(severity, n) \
++  SOME_KIND_OF_LOG_EVERY_N(severity, (n), google::LogMessage::SendToSyslogAndLog)
++
++#define PLOG_EVERY_N(severity, n) \
++  SOME_KIND_OF_PLOG_EVERY_N(severity, (n), google::LogMessage::SendToLog)
++
++#define LOG_FIRST_N(severity, n) \
++  SOME_KIND_OF_LOG_FIRST_N(severity, (n), google::LogMessage::SendToLog)
++
++#define LOG_IF_EVERY_N(severity, condition, n) \
++  SOME_KIND_OF_LOG_IF_EVERY_N(severity, (condition), (n), google::LogMessage::SendToLog)
++
++// We want the special COUNTER value available for LOG_EVERY_X()'ed messages
++enum PRIVATE_Counter {COUNTER};
++
++#ifdef GLOG_NO_ABBREVIATED_SEVERITIES
++// wingdi.h defines ERROR to be 0. When we call LOG(ERROR), it gets
++// substituted with 0, and it expands to COMPACT_GOOGLE_LOG_0. To allow us
++// to keep using this syntax, we define this macro to do the same thing
++// as COMPACT_GOOGLE_LOG_ERROR.
++#define COMPACT_GOOGLE_LOG_0 COMPACT_GOOGLE_LOG_ERROR
++#define SYSLOG_0 SYSLOG_ERROR
++#define LOG_TO_STRING_0 LOG_TO_STRING_ERROR
++// Needed for LOG_IS_ON(ERROR).
++const LogSeverity GLOG_0 = GLOG_ERROR;
++#else
++// Users may include windows.h after logging.h without
++// GLOG_NO_ABBREVIATED_SEVERITIES nor WIN32_LEAN_AND_MEAN.
++// For this case, we cannot detect if ERROR is defined before users
++// actually use ERROR. Let's make an undefined symbol to warn users.
++# define GLOG_ERROR_MSG ERROR_macro_is_defined_Define_GLOG_NO_ABBREVIATED_SEVERITIES_before_including_logging_h_See_the_document_for_detail
++# define COMPACT_GOOGLE_LOG_0 GLOG_ERROR_MSG
++# define SYSLOG_0 GLOG_ERROR_MSG
++# define LOG_TO_STRING_0 GLOG_ERROR_MSG
++# define GLOG_0 GLOG_ERROR_MSG
++#endif
++
++// Plus some debug-logging macros that get compiled to nothing for production
++
++#if DCHECK_IS_ON()
++
++#define DLOG(severity) LOG(severity)
++#define DVLOG(verboselevel) VLOG(verboselevel)
++#define DLOG_IF(severity, condition) LOG_IF(severity, condition)
++#define DLOG_EVERY_N(severity, n) LOG_EVERY_N(severity, n)
++#define DLOG_IF_EVERY_N(severity, condition, n) \
++  LOG_IF_EVERY_N(severity, condition, n)
++#define DLOG_ASSERT(condition) LOG_ASSERT(condition)
++
++// debug-only checking.  executed if DCHECK_IS_ON().
++#define DCHECK(condition) CHECK(condition)
++#define DCHECK_EQ(val1, val2) CHECK_EQ(val1, val2)
++#define DCHECK_NE(val1, val2) CHECK_NE(val1, val2)
++#define DCHECK_LE(val1, val2) CHECK_LE(val1, val2)
++#define DCHECK_LT(val1, val2) CHECK_LT(val1, val2)
++#define DCHECK_GE(val1, val2) CHECK_GE(val1, val2)
++#define DCHECK_GT(val1, val2) CHECK_GT(val1, val2)
++#define DCHECK_NOTNULL(val) CHECK_NOTNULL(val)
++#define DCHECK_STREQ(str1, str2) CHECK_STREQ(str1, str2)
++#define DCHECK_STRCASEEQ(str1, str2) CHECK_STRCASEEQ(str1, str2)
++#define DCHECK_STRNE(str1, str2) CHECK_STRNE(str1, str2)
++#define DCHECK_STRCASENE(str1, str2) CHECK_STRCASENE(str1, str2)
++
++#else  // !DCHECK_IS_ON()
++
++#define DLOG(severity)  \
++  static_cast<void>(0), \
++  true ? (void) 0 : google::LogMessageVoidify() & LOG(severity)
++
++#define DVLOG(verboselevel)             \
++  static_cast<void>(0),                 \
++  (true || !VLOG_IS_ON(verboselevel)) ? \
++    (void) 0 : google::LogMessageVoidify() & LOG(INFO)
++
++#define DLOG_IF(severity, condition) \
++  static_cast<void>(0),              \
++  (true || !(condition)) ? (void) 0 : google::LogMessageVoidify() & LOG(severity)
++
++#define DLOG_EVERY_N(severity, n) \
++  static_cast<void>(0),           \
++  true ? (void) 0 : google::LogMessageVoidify() & LOG(severity)
++
++#define DLOG_IF_EVERY_N(severity, condition, n) \
++  static_cast<void>(0),                         \
++  (true || !(condition))? (void) 0 : google::LogMessageVoidify() & LOG(severity)
++
++#define DLOG_ASSERT(condition) \
++  static_cast<void>(0),        \
++  true ? (void) 0 : LOG_ASSERT(condition)
++
++// MSVC warning C4127: conditional expression is constant
++#define DCHECK(condition) \
++  GLOG_MSVC_PUSH_DISABLE_WARNING(4127) \
++  while (false) \
++    GLOG_MSVC_POP_WARNING() CHECK(condition)
++
++#define DCHECK_EQ(val1, val2) \
++  GLOG_MSVC_PUSH_DISABLE_WARNING(4127) \
++  while (false) \
++    GLOG_MSVC_POP_WARNING() CHECK_EQ(val1, val2)
++
++#define DCHECK_NE(val1, val2) \
++  GLOG_MSVC_PUSH_DISABLE_WARNING(4127) \
++  while (false) \
++    GLOG_MSVC_POP_WARNING() CHECK_NE(val1, val2)
++
++#define DCHECK_LE(val1, val2) \
++  GLOG_MSVC_PUSH_DISABLE_WARNING(4127) \
++  while (false) \
++    GLOG_MSVC_POP_WARNING() CHECK_LE(val1, val2)
++
++#define DCHECK_LT(val1, val2) \
++  GLOG_MSVC_PUSH_DISABLE_WARNING(4127) \
++  while (false) \
++    GLOG_MSVC_POP_WARNING() CHECK_LT(val1, val2)
++
++#define DCHECK_GE(val1, val2) \
++  GLOG_MSVC_PUSH_DISABLE_WARNING(4127) \
++  while (false) \
++    GLOG_MSVC_POP_WARNING() CHECK_GE(val1, val2)
++
++#define DCHECK_GT(val1, val2) \
++  GLOG_MSVC_PUSH_DISABLE_WARNING(4127) \
++  while (false) \
++    GLOG_MSVC_POP_WARNING() CHECK_GT(val1, val2)
++
++// You may see warnings in release mode if you don't use the return
++// value of DCHECK_NOTNULL. Please just use DCHECK for such cases.
++#define DCHECK_NOTNULL(val) (val)
++
++#define DCHECK_STREQ(str1, str2) \
++  GLOG_MSVC_PUSH_DISABLE_WARNING(4127) \
++  while (false) \
++    GLOG_MSVC_POP_WARNING() CHECK_STREQ(str1, str2)
++
++#define DCHECK_STRCASEEQ(str1, str2) \
++  GLOG_MSVC_PUSH_DISABLE_WARNING(4127) \
++  while (false) \
++    GLOG_MSVC_POP_WARNING() CHECK_STRCASEEQ(str1, str2)
++
++#define DCHECK_STRNE(str1, str2) \
++  GLOG_MSVC_PUSH_DISABLE_WARNING(4127) \
++  while (false) \
++    GLOG_MSVC_POP_WARNING() CHECK_STRNE(str1, str2)
++
++#define DCHECK_STRCASENE(str1, str2) \
++  GLOG_MSVC_PUSH_DISABLE_WARNING(4127) \
++  while (false) \
++    GLOG_MSVC_POP_WARNING() CHECK_STRCASENE(str1, str2)
++
++#endif  // DCHECK_IS_ON()
++
++// Log only in verbose mode.
++
++#define VLOG(verboselevel) LOG_IF(INFO, VLOG_IS_ON(verboselevel))
++
++#define VLOG_IF(verboselevel, condition) \
++  LOG_IF(INFO, (condition) && VLOG_IS_ON(verboselevel))
++
++#define VLOG_EVERY_N(verboselevel, n) \
++  LOG_IF_EVERY_N(INFO, VLOG_IS_ON(verboselevel), n)
++
++#define VLOG_IF_EVERY_N(verboselevel, condition, n) \
++  LOG_IF_EVERY_N(INFO, (condition) && VLOG_IS_ON(verboselevel), n)
++
++namespace base_logging {
++
++// LogMessage::LogStream is a std::ostream backed by this streambuf.
++// This class ignores overflow and leaves two bytes at the end of the
++// buffer to allow for a '\n' and '\0'.
++class GOOGLE_GLOG_DLL_DECL LogStreamBuf : public std::streambuf {
++ public:
++  // REQUIREMENTS: "len" must be >= 2 to account for the '\n' and '\0'.
++  LogStreamBuf(char *buf, int len) {
++    setp(buf, buf + len - 2);
++  }
++
++  // This effectively ignores overflow.
++  virtual int_type overflow(int_type ch) {
++    return ch;
++  }
++
++  // Legacy public ostrstream method.
++  size_t pcount() const { return pptr() - pbase(); }
++  char* pbase() const { return std::streambuf::pbase(); }
++};
++
++}  // namespace base_logging
++
++//
++// This class more or less represents a particular log message.  You
++// create an instance of LogMessage and then stream stuff to it.
++// When you finish streaming to it, ~LogMessage is called and the
++// full message gets streamed to the appropriate destination.
++//
++// You shouldn't actually use LogMessage's constructor to log things,
++// though.  You should use the LOG() macro (and variants thereof)
++// above.
++class GOOGLE_GLOG_DLL_DECL LogMessage {
++public:
++  enum {
++    // Passing kNoLogPrefix for the line number disables the
++    // log-message prefix. Useful for using the LogMessage
++    // infrastructure as a printing utility. See also the --log_prefix
++    // flag for controlling the log-message prefix on an
++    // application-wide basis.
++    kNoLogPrefix = -1
++  };
++
++  // LogStream inherit from non-DLL-exported class (std::ostrstream)
++  // and VC++ produces a warning for this situation.
++  // However, MSDN says "C4275 can be ignored in Microsoft Visual C++
++  // 2005 if you are deriving from a type in the Standard C++ Library"
++  // http://msdn.microsoft.com/en-us/library/3tdb471s(VS.80).aspx
++  // Let's just ignore the warning.
++GLOG_MSVC_PUSH_DISABLE_WARNING(4275)
++  class GOOGLE_GLOG_DLL_DECL LogStream : public std::ostream {
++GLOG_MSVC_POP_WARNING()
++  public:
++    LogStream(char *buf, int len, int ctr)
++        : std::ostream(NULL),
++          streambuf_(buf, len),
++          ctr_(ctr),
++          self_(this) {
++      rdbuf(&streambuf_);
++    }
++
++    int ctr() const { return ctr_; }
++    void set_ctr(int ctr) { ctr_ = ctr; }
++    LogStream* self() const { return self_; }
++
++    // Legacy std::streambuf methods.
++    size_t pcount() const { return streambuf_.pcount(); }
++    char* pbase() const { return streambuf_.pbase(); }
++    char* str() const { return pbase(); }
++
++  private:
++    LogStream(const LogStream&);
++    LogStream& operator=(const LogStream&);
++    base_logging::LogStreamBuf streambuf_;
++    int ctr_;  // Counter hack (for the LOG_EVERY_X() macro)
++    LogStream *self_;  // Consistency check hack
++  };
++
++public:
++  // icc 8 requires this typedef to avoid an internal compiler error.
++  typedef void (LogMessage::*SendMethod)();
++
++  LogMessage(const char* file, int line, LogSeverity severity, int ctr,
++             SendMethod send_method);
++
++  // Two special constructors that generate reduced amounts of code at
++  // LOG call sites for common cases.
++
++  // Used for LOG(INFO): Implied are:
++  // severity = INFO, ctr = 0, send_method = &LogMessage::SendToLog.
++  //
++  // Using this constructor instead of the more complex constructor above
++  // saves 19 bytes per call site.
++  LogMessage(const char* file, int line);
++
++  // Used for LOG(severity) where severity != INFO.  Implied
++  // are: ctr = 0, send_method = &LogMessage::SendToLog
++  //
++  // Using this constructor instead of the more complex constructor above
++  // saves 17 bytes per call site.
++  LogMessage(const char* file, int line, LogSeverity severity);
++
++  // Constructor to log this message to a specified sink (if not NULL).
++  // Implied are: ctr = 0, send_method = &LogMessage::SendToSinkAndLog if
++  // also_send_to_log is true, send_method = &LogMessage::SendToSink otherwise.
++  LogMessage(const char* file, int line, LogSeverity severity, LogSink* sink,
++             bool also_send_to_log);
++
++  // Constructor where we also give a vector<string> pointer
++  // for storing the messages (if the pointer is not NULL).
++  // Implied are: ctr = 0, send_method = &LogMessage::SaveOrSendToLog.
++  LogMessage(const char* file, int line, LogSeverity severity,
++             std::vector<std::string>* outvec);
++
++  // Constructor where we also give a string pointer for storing the
++  // message (if the pointer is not NULL).  Implied are: ctr = 0,
++  // send_method = &LogMessage::WriteToStringAndLog.
++  LogMessage(const char* file, int line, LogSeverity severity,
++             std::string* message);
++
++  // A special constructor used for check failures
++  LogMessage(const char* file, int line, const CheckOpString& result);
++
++  ~LogMessage();
++
++  // Flush a buffered message to the sink set in the constructor.  Always
++  // called by the destructor, it may also be called from elsewhere if
++  // needed.  Only the first call is actioned; any later ones are ignored.
++  void Flush();
++
++  // An arbitrary limit on the length of a single log message.  This
++  // is so that streaming can be done more efficiently.
++  static const size_t kMaxLogMessageLen;
++
++  // Theses should not be called directly outside of logging.*,
++  // only passed as SendMethod arguments to other LogMessage methods:
++  void SendToLog();  // Actually dispatch to the logs
++  void SendToSyslogAndLog();  // Actually dispatch to syslog and the logs
++
++  // Call abort() or similar to perform LOG(FATAL) crash.
++  static void __declspec(noreturn) Fail();
++
++  std::ostream& stream();
++
++  int preserved_errno() const;
++
++  // Must be called without the log_mutex held.  (L < log_mutex)
++  static int64 num_messages(int severity);
++
++  struct LogMessageData;
++
++private:
++  // Fully internal SendMethod cases:
++  void SendToSinkAndLog();  // Send to sink if provided and dispatch to the logs
++  void SendToSink();  // Send to sink if provided, do nothing otherwise.
++
++  // Write to string if provided and dispatch to the logs.
++  void WriteToStringAndLog();
++
++  void SaveOrSendToLog();  // Save to stringvec if provided, else to logs
++
++  void Init(const char* file, int line, LogSeverity severity,
++            void (LogMessage::*send_method)());
++
++  // Used to fill in crash information during LOG(FATAL) failures.
++  void RecordCrashReason(glog_internal_namespace_::CrashReason* reason);
++
++  // Counts of messages sent at each priority:
++  static int64 num_messages_[NUM_SEVERITIES];  // under log_mutex
++
++  // We keep the data in a separate struct so that each instance of
++  // LogMessage uses less stack space.
++  LogMessageData* allocated_;
++  LogMessageData* data_;
++
++  friend class LogDestination;
++
++  LogMessage(const LogMessage&);
++  void operator=(const LogMessage&);
++};
++
++// This class happens to be thread-hostile because all instances share
++// a single data buffer, but since it can only be created just before
++// the process dies, we don't worry so much.
++class GOOGLE_GLOG_DLL_DECL LogMessageFatal : public LogMessage {
++ public:
++  LogMessageFatal(const char* file, int line);
++  LogMessageFatal(const char* file, int line, const CheckOpString& result);
++  __declspec(noreturn) ~LogMessageFatal();
++};
++
++// A non-macro interface to the log facility; (useful
++// when the logging level is not a compile-time constant).
++inline void LogAtLevel(int const severity, std::string const &msg) {
++  LogMessage(__FILE__, __LINE__, severity).stream() << msg;
++}
++
++// A macro alternative of LogAtLevel. New code may want to use this
++// version since there are two advantages: 1. this version outputs the
++// file name and the line number where this macro is put like other
++// LOG macros, 2. this macro can be used as C++ stream.
++#define LOG_AT_LEVEL(severity) google::LogMessage(__FILE__, __LINE__, severity).stream()
++
++// Check if it's compiled in C++11 mode.
++//
++// GXX_EXPERIMENTAL_CXX0X is defined by gcc and clang up to at least
++// gcc-4.7 and clang-3.1 (2011-12-13).  __cplusplus was defined to 1
++// in gcc before 4.7 (Crosstool 16) and clang before 3.1, but is
++// defined according to the language version in effect thereafter.
++// Microsoft Visual Studio 14 (2015) sets __cplusplus==199711 despite
++// reasonably good C++11 support, so we set LANG_CXX for it and
++// newer versions (_MSC_VER >= 1900).
++#if (defined(__GXX_EXPERIMENTAL_CXX0X__) || __cplusplus >= 201103L || \
++     (defined(_MSC_VER) && _MSC_VER >= 1900))
++// Helper for CHECK_NOTNULL().
++//
++// In C++11, all cases can be handled by a single function. Since the value
++// category of the argument is preserved (also for rvalue references),
++// member initializer lists like the one below will compile correctly:
++//
++//   Foo()
++//     : x_(CHECK_NOTNULL(MethodReturningUniquePtr())) {}
++template <typename T>
++T CheckNotNull(const char* file, int line, const char* names, T&& t) {
++ if (t == nullptr) {
++   LogMessageFatal(file, line, new std::string(names));
++ }
++ return std::forward<T>(t);
++}
++
++#else
++
++// A small helper for CHECK_NOTNULL().
++template <typename T>
++T* CheckNotNull(const char *file, int line, const char *names, T* t) {
++  if (t == NULL) {
++    LogMessageFatal(file, line, new std::string(names));
++  }
++  return t;
++}
++#endif
++
++// Allow folks to put a counter in the LOG_EVERY_X()'ed messages. This
++// only works if ostream is a LogStream. If the ostream is not a
++// LogStream you'll get an assert saying as much at runtime.
++GOOGLE_GLOG_DLL_DECL std::ostream& operator<<(std::ostream &os,
++                                              const PRIVATE_Counter&);
++
++
++// Derived class for PLOG*() above.
++class GOOGLE_GLOG_DLL_DECL ErrnoLogMessage : public LogMessage {
++ public:
++
++  ErrnoLogMessage(const char* file, int line, LogSeverity severity, int ctr,
++                  void (LogMessage::*send_method)());
++
++  // Postpends ": strerror(errno) [errno]".
++  ~ErrnoLogMessage();
++
++ private:
++  ErrnoLogMessage(const ErrnoLogMessage&);
++  void operator=(const ErrnoLogMessage&);
++};
++
++
++// This class is used to explicitly ignore values in the conditional
++// logging macros.  This avoids compiler warnings like "value computed
++// is not used" and "statement has no effect".
++
++class GOOGLE_GLOG_DLL_DECL LogMessageVoidify {
++ public:
++  LogMessageVoidify() { }
++  // This has to be an operator with a precedence lower than << but
++  // higher than ?:
++  void operator&(std::ostream&) { }
++};
++
++
++// Flushes all log files that contains messages that are at least of
++// the specified severity level.  Thread-safe.
++GOOGLE_GLOG_DLL_DECL void FlushLogFiles(LogSeverity min_severity);
++
++// Flushes all log files that contains messages that are at least of
++// the specified severity level. Thread-hostile because it ignores
++// locking -- used for catastrophic failures.
++GOOGLE_GLOG_DLL_DECL void FlushLogFilesUnsafe(LogSeverity min_severity);
++
++//
++// Set the destination to which a particular severity level of log
++// messages is sent.  If base_filename is "", it means "don't log this
++// severity".  Thread-safe.
++//
++GOOGLE_GLOG_DLL_DECL void SetLogDestination(LogSeverity severity,
++                                            const char* base_filename);
++
++//
++// Set the basename of the symlink to the latest log file at a given
++// severity.  If symlink_basename is empty, do not make a symlink.  If
++// you don't call this function, the symlink basename is the
++// invocation name of the program.  Thread-safe.
++//
++GOOGLE_GLOG_DLL_DECL void SetLogSymlink(LogSeverity severity,
++                                        const char* symlink_basename);
++
++//
++// Used to send logs to some other kind of destination
++// Users should subclass LogSink and override send to do whatever they want.
++// Implementations must be thread-safe because a shared instance will
++// be called from whichever thread ran the LOG(XXX) line.
++class GOOGLE_GLOG_DLL_DECL LogSink {
++ public:
++  virtual ~LogSink();
++
++  // Sink's logging logic (message_len is such as to exclude '\n' at the end).
++  // This method can't use LOG() or CHECK() as logging system mutex(s) are held
++  // during this call.
++  virtual void send(LogSeverity severity, const char* full_filename,
++                    const char* base_filename, int line,
++                    const struct ::tm* tm_time,
++                    const char* message, size_t message_len, int32 usecs) {
++    send(severity, full_filename, base_filename, line,
++         tm_time, message, message_len);
++  }
++  // This send() signature is obsolete.
++  // New implementations should define this in terms of
++  // the above send() method.
++  virtual void send(LogSeverity severity, const char* full_filename,
++                    const char* base_filename, int line,
++                    const struct ::tm* tm_time,
++                    const char* message, size_t message_len) = 0;
++
++  // Redefine this to implement waiting for
++  // the sink's logging logic to complete.
++  // It will be called after each send() returns,
++  // but before that LogMessage exits or crashes.
++  // By default this function does nothing.
++  // Using this function one can implement complex logic for send()
++  // that itself involves logging; and do all this w/o causing deadlocks and
++  // inconsistent rearrangement of log messages.
++  // E.g. if a LogSink has thread-specific actions, the send() method
++  // can simply add the message to a queue and wake up another thread that
++  // handles real logging while itself making some LOG() calls;
++  // WaitTillSent() can be implemented to wait for that logic to complete.
++  // See our unittest for an example.
++  virtual void WaitTillSent();
++
++  // Returns the normal text output of the log message.
++  // Can be useful to implement send().
++  static std::string ToString(LogSeverity severity, const char* file, int line,
++                              const struct ::tm* tm_time,
++                              const char* message, size_t message_len,
++                              int32 usecs);
++
++  // Obsolete
++  static std::string ToString(LogSeverity severity, const char* file, int line,
++                              const struct ::tm* tm_time,
++                              const char* message, size_t message_len) {
++    return ToString(severity, file, line, tm_time, message, message_len, 0);
++  }
++};
++
++// Add or remove a LogSink as a consumer of logging data.  Thread-safe.
++GOOGLE_GLOG_DLL_DECL void AddLogSink(LogSink *destination);
++GOOGLE_GLOG_DLL_DECL void RemoveLogSink(LogSink *destination);
++
++//
++// Specify an "extension" added to the filename specified via
++// SetLogDestination.  This applies to all severity levels.  It's
++// often used to append the port we're listening on to the logfile
++// name.  Thread-safe.
++//
++GOOGLE_GLOG_DLL_DECL void SetLogFilenameExtension(
++    const char* filename_extension);
++
++//
++// Make it so that all log messages of at least a particular severity
++// are logged to stderr (in addition to logging to the usual log
++// file(s)).  Thread-safe.
++//
++GOOGLE_GLOG_DLL_DECL void SetStderrLogging(LogSeverity min_severity);
++
++//
++// Make it so that all log messages go only to stderr.  Thread-safe.
++//
++GOOGLE_GLOG_DLL_DECL void LogToStderr();
++
++//
++// Make it so that all log messages of at least a particular severity are
++// logged via email to a list of addresses (in addition to logging to the
++// usual log file(s)).  The list of addresses is just a string containing
++// the email addresses to send to (separated by spaces, say).  Thread-safe.
++//
++GOOGLE_GLOG_DLL_DECL void SetEmailLogging(LogSeverity min_severity,
++                                          const char* addresses);
++
++// A simple function that sends email. dest is a commma-separated
++// list of addressess.  Thread-safe.
++GOOGLE_GLOG_DLL_DECL bool SendEmail(const char *dest,
++                                    const char *subject, const char *body);
++
++GOOGLE_GLOG_DLL_DECL const std::vector<std::string>& GetLoggingDirectories();
++
++// For tests only:  Clear the internal [cached] list of logging directories to
++// force a refresh the next time GetLoggingDirectories is called.
++// Thread-hostile.
++void TestOnly_ClearLoggingDirectoriesList();
++
++// Returns a set of existing temporary directories, which will be a
++// subset of the directories returned by GetLogginDirectories().
++// Thread-safe.
++GOOGLE_GLOG_DLL_DECL void GetExistingTempDirectories(
++    std::vector<std::string>* list);
++
++// Print any fatal message again -- useful to call from signal handler
++// so that the last thing in the output is the fatal message.
++// Thread-hostile, but a race is unlikely.
++GOOGLE_GLOG_DLL_DECL void ReprintFatalMessage();
++
++// Truncate a log file that may be the append-only output of multiple
++// processes and hence can't simply be renamed/reopened (typically a
++// stdout/stderr).  If the file "path" is > "limit" bytes, copy the
++// last "keep" bytes to offset 0 and truncate the rest. Since we could
++// be racing with other writers, this approach has the potential to
++// lose very small amounts of data. For security, only follow symlinks
++// if the path is /proc/self/fd/*
++GOOGLE_GLOG_DLL_DECL void TruncateLogFile(const char *path,
++                                          int64 limit, int64 keep);
++
++// Truncate stdout and stderr if they are over the value specified by
++// --max_log_size; keep the final 1MB.  This function has the same
++// race condition as TruncateLogFile.
++GOOGLE_GLOG_DLL_DECL void TruncateStdoutStderr();
++
++// Return the string representation of the provided LogSeverity level.
++// Thread-safe.
++GOOGLE_GLOG_DLL_DECL const char* GetLogSeverityName(LogSeverity severity);
++
++// ---------------------------------------------------------------------
++// Implementation details that are not useful to most clients
++// ---------------------------------------------------------------------
++
++// A Logger is the interface used by logging modules to emit entries
++// to a log.  A typical implementation will dump formatted data to a
++// sequence of files.  We also provide interfaces that will forward
++// the data to another thread so that the invoker never blocks.
++// Implementations should be thread-safe since the logging system
++// will write to them from multiple threads.
++
++namespace base {
++
++class GOOGLE_GLOG_DLL_DECL Logger {
++ public:
++  virtual ~Logger();
++
++  // Writes "message[0,message_len-1]" corresponding to an event that
++  // occurred at "timestamp".  If "force_flush" is true, the log file
++  // is flushed immediately.
++  //
++  // The input message has already been formatted as deemed
++  // appropriate by the higher level logging facility.  For example,
++  // textual log messages already contain timestamps, and the
++  // file:linenumber header.
++  virtual void Write(bool force_flush,
++                     time_t timestamp,
++                     const char* message,
++                     int message_len) = 0;
++
++  // Flush any buffered messages
++  virtual void Flush() = 0;
++
++  // Get the current LOG file size.
++  // The returned value is approximate since some
++  // logged data may not have been flushed to disk yet.
++  virtual uint32 LogSize() = 0;
++};
++
++// Get the logger for the specified severity level.  The logger
++// remains the property of the logging module and should not be
++// deleted by the caller.  Thread-safe.
++extern GOOGLE_GLOG_DLL_DECL Logger* GetLogger(LogSeverity level);
++
++// Set the logger for the specified severity level.  The logger
++// becomes the property of the logging module and should not
++// be deleted by the caller.  Thread-safe.
++extern GOOGLE_GLOG_DLL_DECL void SetLogger(LogSeverity level, Logger* logger);
++
++}
++
++// glibc has traditionally implemented two incompatible versions of
++// strerror_r(). There is a poorly defined convention for picking the
++// version that we want, but it is not clear whether it even works with
++// all versions of glibc.
++// So, instead, we provide this wrapper that automatically detects the
++// version that is in use, and then implements POSIX semantics.
++// N.B. In addition to what POSIX says, we also guarantee that "buf" will
++// be set to an empty string, if this function failed. This means, in most
++// cases, you do not need to check the error code and you can directly
++// use the value of "buf". It will never have an undefined value.
++// DEPRECATED: Use StrError(int) instead.
++GOOGLE_GLOG_DLL_DECL int posix_strerror_r(int err, char *buf, size_t len);
++
++// A thread-safe replacement for strerror(). Returns a string describing the
++// given POSIX error code.
++GOOGLE_GLOG_DLL_DECL std::string StrError(int err);
++
++// A class for which we define operator<<, which does nothing.
++class GOOGLE_GLOG_DLL_DECL NullStream : public LogMessage::LogStream {
++ public:
++  // Initialize the LogStream so the messages can be written somewhere
++  // (they'll never be actually displayed). This will be needed if a
++  // NullStream& is implicitly converted to LogStream&, in which case
++  // the overloaded NullStream::operator<< will not be invoked.
++  NullStream() : LogMessage::LogStream(message_buffer_, 1, 0) { }
++  NullStream(const char* /*file*/, int /*line*/,
++             const CheckOpString& /*result*/) :
++      LogMessage::LogStream(message_buffer_, 1, 0) { }
++  NullStream &stream() { return *this; }
++ private:
++  // A very short buffer for messages (which we discard anyway). This
++  // will be needed if NullStream& converted to LogStream& (e.g. as a
++  // result of a conditional expression).
++  char message_buffer_[2];
++};
++
++// Do nothing. This operator is inline, allowing the message to be
++// compiled away. The message will not be compiled away if we do
++// something like (flag ? LOG(INFO) : LOG(ERROR)) << message; when
++// SKIP_LOG=WARNING. In those cases, NullStream will be implicitly
++// converted to LogStream and the message will be computed and then
++// quietly discarded.
++template<class T>
++inline NullStream& operator<<(NullStream &str, const T &) { return str; }
++
++// Similar to NullStream, but aborts the program (without stack
++// trace), like LogMessageFatal.
++class GOOGLE_GLOG_DLL_DECL NullStreamFatal : public NullStream {
++ public:
++  NullStreamFatal() { }
++  NullStreamFatal(const char* file, int line, const CheckOpString& result) :
++      NullStream(file, line, result) { }
++  __declspec(noreturn) ~NullStreamFatal() throw () { _exit(1); }
++};
++
++// Install a signal handler that will dump signal information and a stack
++// trace when the program crashes on certain signals.  We'll install the
++// signal handler for the following signals.
++//
++// SIGSEGV, SIGILL, SIGFPE, SIGABRT, SIGBUS, and SIGTERM.
++//
++// By default, the signal handler will write the failure dump to the
++// standard error.  You can customize the destination by installing your
++// own writer function by InstallFailureWriter() below.
++//
++// Note on threading:
++//
++// The function should be called before threads are created, if you want
++// to use the failure signal handler for all threads.  The stack trace
++// will be shown only for the thread that receives the signal.  In other
++// words, stack traces of other threads won't be shown.
++GOOGLE_GLOG_DLL_DECL void InstallFailureSignalHandler();
++
++// Installs a function that is used for writing the failure dump.  "data"
++// is the pointer to the beginning of a message to be written, and "size"
++// is the size of the message.  You should not expect the data is
++// terminated with '\0'.
++GOOGLE_GLOG_DLL_DECL void InstallFailureWriter(
++    void (*writer)(const char* data, int size));
++
++}
++
++#endif // _LOGGING_H_
+diff --git a/vendor/github.com/google/glog/src/windows/glog/raw_logging.h b/vendor/github.com/google/glog/src/windows/glog/raw_logging.h
+new file mode 100755
+index 000000000..e0e6d6f1a
+--- /dev/null
++++ b/vendor/github.com/google/glog/src/windows/glog/raw_logging.h
+@@ -0,0 +1,184 @@
++// This file is automatically generated from src/glog/raw_logging.h.in
++// using src/windows/preprocess.sh.
++// DO NOT EDIT!
++
++// Copyright (c) 2006, Google Inc.
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are
++// met:
++//
++//     * Redistributions of source code must retain the above copyright
++// notice, this list of conditions and the following disclaimer.
++//     * Redistributions in binary form must reproduce the above
++// copyright notice, this list of conditions and the following disclaimer
++// in the documentation and/or other materials provided with the
++// distribution.
++//     * Neither the name of Google Inc. nor the names of its
++// contributors may be used to endorse or promote products derived from
++// this software without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++//
++// Author: Maxim Lifantsev
++//
++// Thread-safe logging routines that do not allocate any memory or
++// acquire any locks, and can therefore be used by low-level memory
++// allocation and synchronization code.
++
++#ifndef BASE_RAW_LOGGING_H_
++#define BASE_RAW_LOGGING_H_
++
++#include <time.h>
++
++namespace google {
++
++#include "glog/log_severity.h"
++#include "glog/vlog_is_on.h"
++
++// Annoying stuff for windows -- makes sure clients can import these functions
++#ifndef GOOGLE_GLOG_DLL_DECL
++# if defined(_WIN32) && !defined(__CYGWIN__)
++#   define GOOGLE_GLOG_DLL_DECL  __declspec(dllimport)
++# else
++#   define GOOGLE_GLOG_DLL_DECL
++# endif
++#endif
++
++// This is similar to LOG(severity) << format... and VLOG(level) << format..,
++// but
++// * it is to be used ONLY by low-level modules that can't use normal LOG()
++// * it is desiged to be a low-level logger that does not allocate any
++//   memory and does not need any locks, hence:
++// * it logs straight and ONLY to STDERR w/o buffering
++// * it uses an explicit format and arguments list
++// * it will silently chop off really long message strings
++// Usage example:
++//   RAW_LOG(ERROR, "Failed foo with %i: %s", status, error);
++//   RAW_VLOG(3, "status is %i", status);
++// These will print an almost standard log lines like this to stderr only:
++//   E0821 211317 file.cc:123] RAW: Failed foo with 22: bad_file
++//   I0821 211317 file.cc:142] RAW: status is 20
++#define RAW_LOG(severity, ...) \
++  do { \
++    switch (google::GLOG_ ## severity) {  \
++      case 0: \
++        RAW_LOG_INFO(__VA_ARGS__); \
++        break; \
++      case 1: \
++        RAW_LOG_WARNING(__VA_ARGS__); \
++        break; \
++      case 2: \
++        RAW_LOG_ERROR(__VA_ARGS__); \
++        break; \
++      case 3: \
++        RAW_LOG_FATAL(__VA_ARGS__); \
++        break; \
++      default: \
++        break; \
++    } \
++  } while (0)
++
++// The following STRIP_LOG testing is performed in the header file so that it's
++// possible to completely compile out the logging code and the log messages.
++#if STRIP_LOG == 0
++#define RAW_VLOG(verboselevel, ...) \
++  do { \
++    if (VLOG_IS_ON(verboselevel)) { \
++      RAW_LOG_INFO(__VA_ARGS__); \
++    } \
++  } while (0)
++#else
++#define RAW_VLOG(verboselevel, ...) RawLogStub__(0, __VA_ARGS__)
++#endif // STRIP_LOG == 0
++
++#if STRIP_LOG == 0
++#define RAW_LOG_INFO(...) google::RawLog__(google::GLOG_INFO, \
++                                   __FILE__, __LINE__, __VA_ARGS__)
++#else
++#define RAW_LOG_INFO(...) google::RawLogStub__(0, __VA_ARGS__)
++#endif // STRIP_LOG == 0
++
++#if STRIP_LOG <= 1
++#define RAW_LOG_WARNING(...) google::RawLog__(google::GLOG_WARNING,   \
++                                      __FILE__, __LINE__, __VA_ARGS__)
++#else
++#define RAW_LOG_WARNING(...) google::RawLogStub__(0, __VA_ARGS__)
++#endif // STRIP_LOG <= 1
++
++#if STRIP_LOG <= 2
++#define RAW_LOG_ERROR(...) google::RawLog__(google::GLOG_ERROR,       \
++                                    __FILE__, __LINE__, __VA_ARGS__)
++#else
++#define RAW_LOG_ERROR(...) google::RawLogStub__(0, __VA_ARGS__)
++#endif // STRIP_LOG <= 2
++
++#if STRIP_LOG <= 3
++#define RAW_LOG_FATAL(...) google::RawLog__(google::GLOG_FATAL,       \
++                                    __FILE__, __LINE__, __VA_ARGS__)
++#else
++#define RAW_LOG_FATAL(...) \
++  do { \
++    google::RawLogStub__(0, __VA_ARGS__);        \
++    exit(1); \
++  } while (0)
++#endif // STRIP_LOG <= 3
++
++// Similar to CHECK(condition) << message,
++// but for low-level modules: we use only RAW_LOG that does not allocate memory.
++// We do not want to provide args list here to encourage this usage:
++//   if (!cond)  RAW_LOG(FATAL, "foo ...", hard_to_compute_args);
++// so that the args are not computed when not needed.
++#define RAW_CHECK(condition, message)                                   \
++  do {                                                                  \
++    if (!(condition)) {                                                 \
++      RAW_LOG(FATAL, "Check %s failed: %s", #condition, message);       \
++    }                                                                   \
++  } while (0)
++
++// Debug versions of RAW_LOG and RAW_CHECK
++#ifndef NDEBUG
++
++#define RAW_DLOG(severity, ...) RAW_LOG(severity, __VA_ARGS__)
++#define RAW_DCHECK(condition, message) RAW_CHECK(condition, message)
++
++#else  // NDEBUG
++
++#define RAW_DLOG(severity, ...)                                 \
++  while (false)                                                 \
++    RAW_LOG(severity, __VA_ARGS__)
++#define RAW_DCHECK(condition, message) \
++  while (false) \
++    RAW_CHECK(condition, message)
++
++#endif  // NDEBUG
++
++// Stub log function used to work around for unused variable warnings when
++// building with STRIP_LOG > 0.
++static inline void RawLogStub__(int /* ignored */, ...) {
++}
++
++// Helper function to implement RAW_LOG and RAW_VLOG
++// Logs format... at "severity" level, reporting it
++// as called from file:line.
++// This does not allocate memory or acquire locks.
++GOOGLE_GLOG_DLL_DECL void RawLog__(LogSeverity severity,
++                                   const char* file,
++                                   int line,
++                                   const char* format, ...)
++   ;
++
++}
++
++#endif  // BASE_RAW_LOGGING_H_
+diff --git a/vendor/github.com/google/glog/src/windows/glog/stl_logging.h b/vendor/github.com/google/glog/src/windows/glog/stl_logging.h
+new file mode 100755
+index 000000000..a97a90895
+--- /dev/null
++++ b/vendor/github.com/google/glog/src/windows/glog/stl_logging.h
+@@ -0,0 +1,224 @@
++// This file is automatically generated from src/glog/stl_logging.h.in
++// using src/windows/preprocess.sh.
++// DO NOT EDIT!
++
++// Copyright (c) 2003, Google Inc.
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are
++// met:
++//
++//     * Redistributions of source code must retain the above copyright
++// notice, this list of conditions and the following disclaimer.
++//     * Redistributions in binary form must reproduce the above
++// copyright notice, this list of conditions and the following disclaimer
++// in the documentation and/or other materials provided with the
++// distribution.
++//     * Neither the name of Google Inc. nor the names of its
++// contributors may be used to endorse or promote products derived from
++// this software without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++//
++// Stream output operators for STL containers; to be used for logging *only*.
++// Inclusion of this file lets you do:
++//
++// list<string> x;
++// LOG(INFO) << "data: " << x;
++// vector<int> v1, v2;
++// CHECK_EQ(v1, v2);
++//
++// If you want to use this header file with hash_compare maps or slist, you
++// need to define macros before including this file:
++//
++// - GLOG_STL_LOGGING_FOR_UNORDERED     - <unordered_map> and <unordered_set>
++// - GLOG_STL_LOGGING_FOR_TR1_UNORDERED - <tr1/unordered_(map|set)>
++// - GLOG_STL_LOGGING_FOR_EXT_HASH      - <ext/hash_(map|set)>
++// - GLOG_STL_LOGGING_FOR_EXT_SLIST     - <ext/slist>
++//
++
++#ifndef UTIL_GTL_STL_LOGGING_INL_H_
++#define UTIL_GTL_STL_LOGGING_INL_H_
++
++#if !1
++# error We do not support stl_logging for this compiler
++#endif
++
++#include <deque>
++#include <list>
++#include <map>
++#include <ostream>
++#include <set>
++#include <utility>
++#include <vector>
++
++#ifdef GLOG_STL_LOGGING_FOR_UNORDERED
++# include <unordered_map>
++# include <unordered_set>
++#endif
++
++#ifdef GLOG_STL_LOGGING_FOR_TR1_UNORDERED
++# include <tr1/unordered_map>
++# include <tr1/unordered_set>
++#endif
++
++#ifdef GLOG_STL_LOGGING_FOR_EXT_HASH
++# include <ext/hash_set>
++# include <ext/hash_map>
++#endif
++#ifdef GLOG_STL_LOGGING_FOR_EXT_SLIST
++# include <ext/slist>
++#endif
++
++// Forward declare these two, and define them after all the container streams
++// operators so that we can recurse from pair -> container -> container -> pair
++// properly.
++template<class First, class Second>
++std::ostream& operator<<(std::ostream& out, const std::pair<First, Second>& p);
++
++namespace google {
++
++template<class Iter>
++void PrintSequence(std::ostream& out, Iter begin, Iter end);
++
++}
++
++#define OUTPUT_TWO_ARG_CONTAINER(Sequence) \
++template<class T1, class T2> \
++inline std::ostream& operator<<(std::ostream& out, \
++                                const Sequence<T1, T2>& seq) { \
++  google::PrintSequence(out, seq.begin(), seq.end()); \
++  return out; \
++}
++
++OUTPUT_TWO_ARG_CONTAINER(std::vector)
++OUTPUT_TWO_ARG_CONTAINER(std::deque)
++OUTPUT_TWO_ARG_CONTAINER(std::list)
++#ifdef GLOG_STL_LOGGING_FOR_EXT_SLIST
++OUTPUT_TWO_ARG_CONTAINER(__gnu_cxx::slist)
++#endif
++
++#undef OUTPUT_TWO_ARG_CONTAINER
++
++#define OUTPUT_THREE_ARG_CONTAINER(Sequence) \
++template<class T1, class T2, class T3> \
++inline std::ostream& operator<<(std::ostream& out, \
++                                const Sequence<T1, T2, T3>& seq) { \
++  google::PrintSequence(out, seq.begin(), seq.end()); \
++  return out; \
++}
++
++OUTPUT_THREE_ARG_CONTAINER(std::set)
++OUTPUT_THREE_ARG_CONTAINER(std::multiset)
++
++#undef OUTPUT_THREE_ARG_CONTAINER
++
++#define OUTPUT_FOUR_ARG_CONTAINER(Sequence) \
++template<class T1, class T2, class T3, class T4> \
++inline std::ostream& operator<<(std::ostream& out, \
++                                const Sequence<T1, T2, T3, T4>& seq) { \
++  google::PrintSequence(out, seq.begin(), seq.end()); \
++  return out; \
++}
++
++OUTPUT_FOUR_ARG_CONTAINER(std::map)
++OUTPUT_FOUR_ARG_CONTAINER(std::multimap)
++#ifdef GLOG_STL_LOGGING_FOR_UNORDERED
++OUTPUT_FOUR_ARG_CONTAINER(std::unordered_set)
++OUTPUT_FOUR_ARG_CONTAINER(std::unordered_multiset)
++#endif
++#ifdef GLOG_STL_LOGGING_FOR_TR1_UNORDERED
++OUTPUT_FOUR_ARG_CONTAINER(std::tr1::unordered_set)
++OUTPUT_FOUR_ARG_CONTAINER(std::tr1::unordered_multiset)
++#endif
++#ifdef GLOG_STL_LOGGING_FOR_EXT_HASH
++OUTPUT_FOUR_ARG_CONTAINER(__gnu_cxx::hash_set)
++OUTPUT_FOUR_ARG_CONTAINER(__gnu_cxx::hash_multiset)
++#endif
++
++#undef OUTPUT_FOUR_ARG_CONTAINER
++
++#define OUTPUT_FIVE_ARG_CONTAINER(Sequence) \
++template<class T1, class T2, class T3, class T4, class T5> \
++inline std::ostream& operator<<(std::ostream& out, \
++                                const Sequence<T1, T2, T3, T4, T5>& seq) { \
++  google::PrintSequence(out, seq.begin(), seq.end()); \
++  return out; \
++}
++
++#ifdef GLOG_STL_LOGGING_FOR_UNORDERED
++OUTPUT_FIVE_ARG_CONTAINER(std::unordered_map)
++OUTPUT_FIVE_ARG_CONTAINER(std::unordered_multimap)
++#endif
++#ifdef GLOG_STL_LOGGING_FOR_TR1_UNORDERED
++OUTPUT_FIVE_ARG_CONTAINER(std::tr1::unordered_map)
++OUTPUT_FIVE_ARG_CONTAINER(std::tr1::unordered_multimap)
++#endif
++#ifdef GLOG_STL_LOGGING_FOR_EXT_HASH
++OUTPUT_FIVE_ARG_CONTAINER(__gnu_cxx::hash_map)
++OUTPUT_FIVE_ARG_CONTAINER(__gnu_cxx::hash_multimap)
++#endif
++
++#undef OUTPUT_FIVE_ARG_CONTAINER
++
++template<class First, class Second>
++inline std::ostream& operator<<(std::ostream& out,
++                                const std::pair<First, Second>& p) {
++  out << '(' << p.first << ", " << p.second << ')';
++  return out;
++}
++
++namespace google {
++
++template<class Iter>
++inline void PrintSequence(std::ostream& out, Iter begin, Iter end) {
++  // Output at most 100 elements -- appropriate if used for logging.
++  for (int i = 0; begin != end && i < 100; ++i, ++begin) {
++    if (i > 0) out << ' ';
++    out << *begin;
++  }
++  if (begin != end) {
++    out << " ...";
++  }
++}
++
++}
++
++// Note that this is technically undefined behavior! We are adding things into
++// the std namespace for a reason though -- we are providing new operations on
++// types which are themselves defined with this namespace. Without this, these
++// operator overloads cannot be found via ADL. If these definitions are not
++// found via ADL, they must be #included before they're used, which requires
++// this header to be included before apparently independent other headers.
++//
++// For example, base/logging.h defines various template functions to implement
++// CHECK_EQ(x, y) and stream x and y into the log in the event the check fails.
++// It does so via the function template MakeCheckOpValueString:
++//   template<class T>
++//   void MakeCheckOpValueString(strstream* ss, const T& v) {
++//     (*ss) << v;
++//   }
++// Because 'glog/logging.h' is included before 'glog/stl_logging.h',
++// subsequent CHECK_EQ(v1, v2) for vector<...> typed variable v1 and v2 can only
++// find these operator definitions via ADL.
++//
++// Even this solution has problems -- it may pull unintended operators into the
++// namespace as well, allowing them to also be found via ADL, and creating code
++// that only works with a particular order of includes. Long term, we need to
++// move all of the *definitions* into namespace std, bet we need to ensure no
++// one references them first. This lets us take that step. We cannot define them
++// in both because that would create ambiguous overloads when both are found.
++namespace std { using ::operator<<; }
++
++#endif  // UTIL_GTL_STL_LOGGING_INL_H_
+diff --git a/vendor/github.com/google/glog/src/windows/glog/vlog_is_on.h b/vendor/github.com/google/glog/src/windows/glog/vlog_is_on.h
+new file mode 100755
+index 000000000..409a4011b
+--- /dev/null
++++ b/vendor/github.com/google/glog/src/windows/glog/vlog_is_on.h
+@@ -0,0 +1,133 @@
++// This file is automatically generated from src/glog/vlog_is_on.h.in
++// using src/windows/preprocess.sh.
++// DO NOT EDIT!
++
++// Copyright (c) 1999, 2007, Google Inc.
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are
++// met:
++//
++//     * Redistributions of source code must retain the above copyright
++// notice, this list of conditions and the following disclaimer.
++//     * Redistributions in binary form must reproduce the above
++// copyright notice, this list of conditions and the following disclaimer
++// in the documentation and/or other materials provided with the
++// distribution.
++//     * Neither the name of Google Inc. nor the names of its
++// contributors may be used to endorse or promote products derived from
++// this software without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++//
++// Author: Ray Sidney and many others
++//
++// Defines the VLOG_IS_ON macro that controls the variable-verbosity
++// conditional logging.
++//
++// It's used by VLOG and VLOG_IF in logging.h
++// and by RAW_VLOG in raw_logging.h to trigger the logging.
++//
++// It can also be used directly e.g. like this:
++//   if (VLOG_IS_ON(2)) {
++//     // do some logging preparation and logging
++//     // that can't be accomplished e.g. via just VLOG(2) << ...;
++//   }
++//
++// The truth value that VLOG_IS_ON(level) returns is determined by 
++// the three verbosity level flags:
++//   --v=<n>  Gives the default maximal active V-logging level;
++//            0 is the default.
++//            Normally positive values are used for V-logging levels.
++//   --vmodule=<str>  Gives the per-module maximal V-logging levels to override
++//                    the value given by --v.
++//                    E.g. "my_module=2,foo*=3" would change the logging level
++//                    for all code in source files "my_module.*" and "foo*.*"
++//                    ("-inl" suffixes are also disregarded for this matching).
++//
++// SetVLOGLevel helper function is provided to do limited dynamic control over
++// V-logging by overriding the per-module settings given via --vmodule flag.
++//
++// CAVEAT: --vmodule functionality is not available in non gcc compilers.
++//
++
++#ifndef BASE_VLOG_IS_ON_H_
++#define BASE_VLOG_IS_ON_H_
++
++#include "glog/log_severity.h"
++
++// Annoying stuff for windows -- makes sure clients can import these functions
++#ifndef GOOGLE_GLOG_DLL_DECL
++# if defined(_WIN32) && !defined(__CYGWIN__)
++#   define GOOGLE_GLOG_DLL_DECL  __declspec(dllimport)
++# else
++#   define GOOGLE_GLOG_DLL_DECL
++# endif
++#endif
++
++#if defined(__GNUC__)
++// We emit an anonymous static int* variable at every VLOG_IS_ON(n) site.
++// (Normally) the first time every VLOG_IS_ON(n) site is hit,
++// we determine what variable will dynamically control logging at this site:
++// it's either FLAGS_v or an appropriate internal variable
++// matching the current source file that represents results of
++// parsing of --vmodule flag and/or SetVLOGLevel calls.
++#define VLOG_IS_ON(verboselevel)                                \
++  __extension__  \
++  ({ static google::int32* vlocal__ = &google::kLogSiteUninitialized;           \
++     google::int32 verbose_level__ = (verboselevel);                    \
++     (*vlocal__ >= verbose_level__) &&                          \
++     ((vlocal__ != &google::kLogSiteUninitialized) ||                   \
++      (google::InitVLOG3__(&vlocal__, &FLAGS_v,                         \
++                   __FILE__, verbose_level__))); })
++#else
++// GNU extensions not available, so we do not support --vmodule.
++// Dynamic value of FLAGS_v always controls the logging level.
++#define VLOG_IS_ON(verboselevel) (FLAGS_v >= (verboselevel))
++#endif
++
++// Set VLOG(_IS_ON) level for module_pattern to log_level.
++// This lets us dynamically control what is normally set by the --vmodule flag.
++// Returns the level that previously applied to module_pattern.
++// NOTE: To change the log level for VLOG(_IS_ON) sites
++//	 that have already executed after/during InitGoogleLogging,
++//	 one needs to supply the exact --vmodule pattern that applied to them.
++//       (If no --vmodule pattern applied to them
++//       the value of FLAGS_v will continue to control them.)
++extern GOOGLE_GLOG_DLL_DECL int SetVLOGLevel(const char* module_pattern,
++                                             int log_level);
++
++// Various declarations needed for VLOG_IS_ON above: =========================
++
++// Special value used to indicate that a VLOG_IS_ON site has not been
++// initialized.  We make this a large value, so the common-case check
++// of "*vlocal__ >= verbose_level__" in VLOG_IS_ON definition
++// passes in such cases and InitVLOG3__ is then triggered.
++extern google::int32 kLogSiteUninitialized;
++
++// Helper routine which determines the logging info for a particalur VLOG site.
++//   site_flag     is the address of the site-local pointer to the controlling
++//                 verbosity level
++//   site_default  is the default to use for *site_flag
++//   fname         is the current source file name
++//   verbose_level is the argument to VLOG_IS_ON
++// We will return the return value for VLOG_IS_ON
++// and if possible set *site_flag appropriately.
++extern GOOGLE_GLOG_DLL_DECL bool InitVLOG3__(
++    google::int32** site_flag,
++    google::int32* site_default,
++    const char* fname,
++    google::int32 verbose_level);
++
++#endif  // BASE_VLOG_IS_ON_H_

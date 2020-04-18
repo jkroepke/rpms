@@ -1,0 +1,12 @@
+diff -up ./cri-o-3f89eba17645b016e79bdffbe922b2a8bb0a9ae0/vendor/github.com/mtrmac/gpgme/gpgme.go.1792243 ./cri-o-3f89eba17645b016e79bdffbe922b2a8bb0a9ae0/vendor/github.com/mtrmac/gpgme/gpgme.go
+--- cri-o-3f89eba17645b016e79bdffbe922b2a8bb0a9ae0/vendor/github.com/mtrmac/gpgme/gpgme.go.1792243	2020-01-20 20:30:25.130707059 +0100
++++ cri-o-3f89eba17645b016e79bdffbe922b2a8bb0a9ae0/vendor/github.com/mtrmac/gpgme/gpgme.go	2020-01-20 20:30:25.131707068 +0100
+@@ -1,7 +1,7 @@
+ // Package gpgme provides a Go wrapper for the GPGME library
+ package gpgme
+ 
+-// #cgo LDFLAGS: -lgpgme -lassuan -lgpg-error
++// #cgo LDFLAGS: -lgpgme-pthread -lassuan -lgpg-error
+ // #cgo CPPFLAGS: -D_FILE_OFFSET_BITS=64
+ // #include <stdlib.h>
+ // #include <gpgme.h>

@@ -1,7 +1,8 @@
 *.iml
 /.idea
 
-tmp/*
-!tmp/.gitkeep
+/git/tmp/*
+!/git/tmp/.gitkeep
 
-packages/git*.tar.*
+/git/packages/git*.tar.*
+/cri-o/**/packages/cri-o*.tar.*
