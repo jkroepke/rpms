@@ -13,8 +13,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
+      - name: Update cri-o 1.11 rpm
+        run: ./scripts/update.sh
+        working-directory: cri-o/1.11
       - name: Update git rpm
-      - run: ./scripts/update.sh
+        run: ./scripts/update.sh
         working-directory: git
       - name: Push changes
         uses: ad-m/github-push-action@master

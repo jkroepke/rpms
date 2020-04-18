@@ -9,7 +9,7 @@ if [ "${VERSION}" != "" ]; then
 
   curl -sSf -LJ \
     -o ./tmp/src.rpm \
-    "https://download.fedoraproject.org/pub/fedora/linux/development/rawhide/Everything/source/tree/Packages/g/${VERSION}"
+    "http://ftp.redhat.com/redhat/linux/enterprise/7Server/en/RHOSE/SRPMS/${VERSION}"
 
   docker run --rm \
     --name unpack-rpm \
