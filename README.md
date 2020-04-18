@@ -5,8 +5,9 @@ It's periodically scrape the git source rpm from fedora rawhide and compiles it 
 
 # Packgaes
 
-* [git](./git)
 * [cri-o 1.11](./cri-o/1.11)
+* [cri-tools 1.11](./cri-tools/1.11)
+* [git](./git)
 
 ## Build infrastructure
 
