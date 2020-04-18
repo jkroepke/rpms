@@ -16,6 +16,9 @@ jobs:
       - name: Update cri-o 1.11 rpm
         run: ./scripts/update.sh
         working-directory: cri-o/1.11
+      - name: Update cri-tools 1.11 rpm
+        run: ./scripts/update.sh
+        working-directory: cri-tools/1.11
       - name: Update git rpm
         run: ./scripts/update.sh
         working-directory: git
