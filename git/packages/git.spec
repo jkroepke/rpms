@@ -8,12 +8,17 @@
 
 # Settings for Fedora
 %if 0%{?fedora}
-%bcond_without              asciidoctor
 # linkchecker is not available on EL
 %bcond_without              linkcheck
 %else
-%bcond_with                 asciidoctor
 %bcond_with                 linkcheck
+%endif
+
+# Settings for Fedora and EL >= 9
+%if 0%{?fedora} || 0%{?rhel} >= 9
+%bcond_without              asciidoctor
+%else
+%bcond_with                 asciidoctor
 %endif
 
 # Settings for Fedora and EL > 7
@@ -84,7 +89,7 @@
 #global rcrev   .rc0
 
 Name:           git
-Version:        2.26.2
+Version:        2.27.0
 Release:        1%{?rcrev}%{?dist}
 Summary:        Fast Version Control System
 License:        GPLv2
@@ -116,13 +121,6 @@ Source99:       print-failed-test-output
 
 # https://bugzilla.redhat.com/490602
 Patch0:         git-cvsimport-Ignore-cvsps-2.2b1-Branches-output.patch
-
-# Fix issue with fast-forward rebases when rebase.abbreviateCommands is set
-# https://lore.kernel.org/git/9b4bc756764d87c9f34c11e6ec2fc6482f531805.camel@gmail.com/
-# https://github.com/git/git/commit/68e7090f31
-Patch1:         0001-sequencer-don-t-abbreviate-a-command-if-it-doesn-t-h.patch
-# https://github.com/git/git/commit/de9f1d3ef4
-Patch2:         0002-t3432-test-merge-with-rebase.abbreviateCommands-true.patch
 
 %if %{with docs}
 # pod2man is needed to build Git.3pm
@@ -1060,6 +1058,18 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Mon Jun 01 2020 Todd Zullinger <tmz@pobox.com> - 2.27.0-1
+- update to 2.27.0
+
+* Tue May 26 2020 Todd Zullinger <tmz@pobox.com> - 2.27.0-0.2.rc2
+- update to 2.27.0-rc2
+
+* Thu May 21 2020 Todd Zullinger <tmz@pobox.com> - 2.27.0-0.1.rc1
+- update to 2.27.0-rc1
+
+* Thu May 21 2020 Merlin Mathesius <mmathesi@redhat.com> - 2.26.2-2
+- Minor conditional fixes for ELN
+
 * Mon Apr 20 2020 Todd Zullinger <tmz@pobox.com> - 2.26.2-1
 - update to 2.26.2 (CVE-2020-11008)
 
