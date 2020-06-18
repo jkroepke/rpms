@@ -24,7 +24,7 @@
 
 Name:           cri-tools
 Version:        1.11.1
-Release:        2.rhaos3.11.git%{shortcommit}%{?dist}
+Release:        3.rhaos3.11.git%{shortcommit}%{?dist}
 Summary:        CLI and validation tools for Container Runtime Interface
 License:        ASL 2.0
 URL:            https://%{provider_prefix}
@@ -35,7 +35,7 @@ ExclusiveArch:  %{?go_arches:%{go_arches}}%{!?go_arches:%{ix86} x86_64 aarch64 %
 BuildRequires:  %{?go_compiler:compiler(go-compiler)}%{!?go_compiler:golang}
 BuildRequires:  glibc-static
 BuildRequires:  git
-BuildRequires:  go-md2man
+BuildRequires:  golang-github-cpuguy83-go-md2man >= 1.0.7-1
 Provides:       crictl = %{version}-%{release}
 
 # vendored libraries
@@ -116,6 +116,9 @@ install -p -m 644 docs/crictl.1 %{buildroot}%{_mandir}/man1
 %{_mandir}/man1/crictl*
 
 %changelog
+* Wed May 27 2020 Lokesh Mandvekar <lsm5@fedoraproject.org> - 1.11.1-3.rhaos3.11.gitedabfb5
+- Resolves: #1616184 - build with go-md2man 1.0.7
+
 * Fri Sep 14 2018 Lokesh Mandvekar <lsm5@redhat.com> - 1.11.1-1.rhaos3.11.gitedabfb5
 - built release-1.11 commit edabfb5
 - use correct version number
