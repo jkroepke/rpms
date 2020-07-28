@@ -17,7 +17,7 @@
 # https://github.com/cri-o/cri-o
 %global provider_prefix %{provider}.%{provider_tld}/%{project}/%{repo}
 %global import_path %{provider_prefix}
-%global commit0 6d43aae009411bc6dec1fd6242769ee0f998216f
+%global commit0 1eee6811f989b79669448414c8a08c7cb2c96c0e
 %global shortcommit0 %(c=%{commit0}; echo ${c:0:7})
 %global git0 https://%{import_path}
 
@@ -25,19 +25,19 @@
 
 Name: %{repo}
 Version: 1.11.16
-Release: 0.9.dev.rhaos3.11.git%{shortcommit0}%{?dist}
+Release: 0.10.dev.rhaos3.11.git%{shortcommit0}%{?dist}
 Summary: Kubernetes Container Runtime Interface for OCI-based containers
 License: ASL 2.0
 URL: %{git0}
 Source0: %{git0}/archive/%{commit0}/%{name}-%{shortcommit0}.tar.gz
 Source3: %{service_name}-network.sysconfig
 Source4: %{service_name}-storage.sysconfig
+# cgo LDFLAGS patch only for rhel
+%if ! 0%{?fedora}
 Patch0: cri-o-1792243.patch
+%endif
 # https://bugzilla.redhat.com/show_bug.cgi?id=1796066
 Patch1: cri-o-1796066.patch
-# related bug: https://bugzilla.redhat.com/show_bug.cgi?id=1774184
-# patch:       https://github.com/cri-o/cri-o/pull/3532.patch
-Patch2: cri-o-1774184.patch
 
 # If go_compiler is not set to 1, there is no virtual provide. Use golang instead.
 BuildRequires: %{?go_compiler:compiler(go-compiler)}%{!?go_compiler:golang}
@@ -167,6 +167,9 @@ export GOPATH=%{buildroot}/%{gopath}:$(pwd)/Godeps/_workspace:%{gopath}
 
 
 %changelog
+* Wed Jun 17 2020 Peter Hunt <pehunt@redhat.com> - 1.11.16-0.10.dev.rhaos3.11.git1eee681
+- bump to 1eee681
+
 * Mon May 04 2020 Jindrich Novy <jnovy@redhat.com> - 1.11.16-0.9.dev.rhaos3.11.git6d43aae
 - fix "[conmon] Liveness probes timeout unexpectedly"
 - Resolves: #1774184
