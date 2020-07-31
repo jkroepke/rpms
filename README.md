@@ -3,11 +3,12 @@ Provides latest programs for enterprise linux
 
 It's periodically scrape the git source rpm from fedora rawhide and compiles it for RHEL 7 and RHEL 8.
 
-# Packgaes
+# Packages
 
 * [cri-o 1.11](./cri-o/1.11)
 * [cri-tools 1.11](./cri-tools/1.11)
 * [git](./git)
+* [golang-github-cpuguy83-go-md2man](./golang-github-cpuguy83-go-md2man)
 
 ## Build infrastructure
 
