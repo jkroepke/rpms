@@ -3,7 +3,7 @@
 source := $(shell dirname $(spec))
 
 srpm:
-	yum install -y mock
+	dnf install -y mock
 	mock -r epel-7-x86_64 \
 		--enable-network \
 		--buildsrpm \
