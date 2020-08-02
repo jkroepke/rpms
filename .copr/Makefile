@@ -4,7 +4,9 @@ source := $(shell dirname $(spec))
 
 srpm:
 	dnf install -y mock
+
 	mock -r epel-7-x86_64 \
+		--isolation=simple \
 		--enable-network \
 		--buildsrpm \
 		--source=$(source) \
