@@ -33,8 +33,9 @@ Source0: %{git0}/archive/%{commit0}/%{name}-%{shortcommit0}.tar.gz
 Source3: %{service_name}-network.sysconfig
 Source4: %{service_name}-storage.sysconfig
 # cgo LDFLAGS patch only for rhel
+%if ! 0%{?fedora}
 Patch0: cri-o-1792243.patch
-
+%endif
 # https://bugzilla.redhat.com/show_bug.cgi?id=1796066
 Patch1: cri-o-1796066.patch
 
