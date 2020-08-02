@@ -1,0 +1,6 @@
+root = true
+
+[Makefile]
+indent_size = tab
+indent_style = tab
+tab_width = 4
