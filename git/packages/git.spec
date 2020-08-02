@@ -89,8 +89,8 @@
 #global rcrev   .rc0
 
 Name:           git
-Version:        2.27.0
-Release:        1%{?rcrev}%{?dist}.2
+Version:        2.28.0
+Release:        1%{?rcrev}%{?dist}
 Summary:        Fast Version Control System
 License:        GPLv2
 URL:            https://git-scm.com/
@@ -1058,6 +1058,21 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Mon Jul 27 2020 Todd Zullinger <tmz@pobox.com> - 2.28.0-1
+- update to 2.28.0
+
+* Mon Jul 27 2020 Fedora Release Engineering <releng@fedoraproject.org> - 2.28.0-0.3.rc2
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_33_Mass_Rebuild
+
+* Wed Jul 22 2020 Todd Zullinger <tmz@pobox.com> - 2.28.0-0.2.rc2
+- update to 2.28.0-rc2
+
+* Sat Jul 18 2020 Todd Zullinger <tmz@pobox.com> - 2.28.0-0.1.rc1
+- update to 2.28.0-rc1
+
+* Thu Jul 09 2020 Todd Zullinger <tmz@pobox.com> - 2.28.0-0.0.rc0
+- update to 2.28.0-rc0
+
 * Fri Jun 26 2020 Jitka Plesnikova <jplesnik@redhat.com> - 2.27.0-1.2
 - Perl 5.32 re-rebuild of bootstrapped packages
 
