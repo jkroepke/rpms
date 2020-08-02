@@ -3,13 +3,10 @@
 source := $(shell dirname $(spec))
 
 srpm:
-	dnf install -y mock
-
-	mock -r epel-7-x86_64 \
-		--isolation=simple \
-		--enable-network \
-		--buildsrpm \
-		--source=$(source) \
-		--spec=$(spec) \
-		--resultdir=$(outdir) \
-		--define '_disable_source_fetch %{nil}'
+	rpmbuild \
+		--define '_srcrpmdir $(outdir)' \
+		--define '_sourcedir $(source)' \
+		--define 'dist el7' \
+		--undefine=fedora \
+		--undefine=_disable_source_fetch \
+		-bs $(spec)
