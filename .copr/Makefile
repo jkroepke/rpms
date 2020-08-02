@@ -6,7 +6,9 @@ srpm:
 	rpmbuild \
 		--define '_srcrpmdir $(outdir)' \
 		--define '_sourcedir $(source)' \
-		--define 'dist el7' \
+		--define 'rhel 7' \
+		--define 'dist .el7' \
+		--define 'el7 1' \
 		--undefine=fedora \
 		--undefine=_disable_source_fetch \
 		-bs $(spec)
