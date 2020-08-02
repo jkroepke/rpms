@@ -9,5 +9,5 @@ srpm:
 		--buildsrpm \
 		--source=$(source) \
 		--spec=$(spec) \
-      	--resultdir=$(outdir) \
-      	--define '_disable_source_fetch %{nil}'
+		--resultdir=$(outdir) \
+		--define '_disable_source_fetch %{nil}'
