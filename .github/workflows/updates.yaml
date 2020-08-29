@@ -26,6 +26,4 @@ jobs:
         run: ./scripts/update.sh
         working-directory: golang-github-cpuguy83-go-md2man
       - name: Push changes
-        uses: ad-m/github-push-action@master
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+        run: git push
