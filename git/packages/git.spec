@@ -6,6 +6,13 @@
 
 %global gitexecdir          %{_libexecdir}/git-core
 
+# Settings for Fedora >= 34
+%if 0%{?fedora} >= 34
+%bcond_with                 emacs
+%else
+%bcond_without              emacs
+%endif
+
 # Settings for Fedora
 %if 0%{?fedora}
 # linkchecker is not available on EL
@@ -89,7 +96,7 @@
 #global rcrev   .rc0
 
 Name:           git
-Version:        2.28.0
+Version:        2.29.0
 Release:        1%{?rcrev}%{?dist}
 Summary:        Fast Version Control System
 License:        GPLv2
@@ -141,7 +148,10 @@ BuildRequires:  linkchecker
 # endif with docs
 BuildRequires:  desktop-file-utils
 BuildRequires:  diffutils
-BuildRequires:  emacs
+%if %{with emacs}
+BuildRequires:  emacs-common
+%endif
+# endif emacs-common
 BuildRequires:  expat-devel
 BuildRequires:  findutils
 BuildRequires:  gawk
@@ -264,10 +274,16 @@ Requires:       perl(Term::ReadKey)
 # endif ! defined perl_bootstrap
 Requires:       perl-Git = %{version}-%{release}
 
-%if %{emacs_filesystem} && %{defined _emacs_version}
+%if %{with emacs} && %{emacs_filesystem} && %{defined _emacs_version}
 Requires:       emacs-filesystem >= %{_emacs_version}
 %endif
-# endif emacs_filesystem
+# endif with emacs && emacs_filesystem
+
+# Obsolete emacs-git if it's disabled
+%if %{without emacs}
+Obsoletes:      emacs-git < %{?epoch:%{epoch}:}%{version}-%{release}
+%endif
+# endif without emacs
 
 # Obsolete git-cvs if it's disabled
 %if %{without cvs}
@@ -317,10 +333,10 @@ Requires:       perl-Git = %{version}-%{release}
 Requires:       perl(Term::ReadKey)
 %endif
 # endif ! defined perl_bootstrap
-%if ! %{emacs_filesystem}
+%if %{with emacs} && ! %{emacs_filesystem}
 Requires:       emacs-git = %{version}-%{release}
 %endif
-# endif ! emacs_filesystem
+# endif with emacs && ! emacs_filesystem
 %description all
 Git is a fast, scalable, distributed revision control system with an
 unusually rich command set that provides both high-level operations
@@ -397,7 +413,7 @@ Requires:       perl(Net::SMTP::SSL)
 %description email
 %{summary}.
 
-%if ! %{emacs_filesystem}
+%if %{with emacs} && ! %{emacs_filesystem}
 %package -n emacs-git
 Summary:        Git version control system support for Emacs
 Requires:       git = %{version}-%{release}
@@ -408,7 +424,7 @@ Provides:       emacs-git-el = %{version}-%{release}
 %description -n emacs-git
 %{summary}.
 %endif
-# endif ! emacs_filesystem
+# endif with emacs && ! emacs_filesystem
 
 %package -n gitk
 Summary:        Git repository browser
@@ -618,22 +634,21 @@ export SOURCE_DATE_EPOCH=$(date -r version +%%s 2>/dev/null)
 %if %{with python2}
 sed -i -e '1s@#! */usr/bin/env python$@#!%{__python2}@' \
     contrib/fast-import/import-zips.py \
-    contrib/hg-to-git/hg-to-git.py \
     contrib/hooks/multimail/git_multimail.py \
     contrib/hooks/multimail/migrate-mailhook-config \
-    contrib/hooks/multimail/post-receive.example \
-    contrib/svn-fe/svnrdump_sim.py
+    contrib/hooks/multimail/post-receive.example
 %else
-# Remove contrib/fast-import/import-zips.py, contrib/hg-to-git, and
-# contrib/svn-fe which all require python2.
-rm -rf contrib/fast-import/import-zips.py contrib/hg-to-git contrib/svn-fe
+# Remove contrib/fast-import/import-zips.py which requires python2.
+rm -rf contrib/fast-import/import-zips.py
 %endif
 # endif with python2
 
 # The multimail hook is installed with git.  Use python3 to avoid an
-# unnecessary python2 dependency, if possible.
+# unnecessary python2 dependency, if possible.  Also fix contrib/hg-to-git
+# while here.
 %if %{with python3}
 sed -i -e '1s@#!\( */usr/bin/env python\|%{__python2}\)$@#!%{__python3}@' \
+    contrib/hg-to-git/hg-to-git.py \
     contrib/hooks/multimail/git_multimail.py \
     contrib/hooks/multimail/migrate-mailhook-config \
     contrib/hooks/multimail/post-receive.example
@@ -645,6 +660,7 @@ sed -i -e '1s@#!\( */usr/bin/env python\|%{__python2}\)$@#!%{__python3}@' \
 
 %make_install -C contrib/contacts
 
+%if %{with emacs}
 %global elispdir %{_emacs_sitelispdir}/git
 pushd contrib/emacs >/dev/null
 for el in *.el ; do
@@ -654,6 +670,8 @@ for el in *.el ; do
     rm -f $el # clean up to avoid cruft in git-core-doc
 done
 popd >/dev/null
+%endif
+# endif with emacs
 
 %if %{with libsecret}
 install -pm 755 contrib/credential/libsecret/git-credential-libsecret \
@@ -795,7 +813,7 @@ not_core_doc_re="(git-(cvs|gui|citool|daemon|instaweb|subtree))|p4|svn|email|git
 mkdir -p %{buildroot}%{_pkgdocdir}/
 cp -pr CODE_OF_CONDUCT.md README.md Documentation/*.txt Documentation/RelNotes contrib %{buildroot}%{_pkgdocdir}/
 # Remove contrib/ files/dirs which have nothing useful for documentation
-rm -rf %{buildroot}%{_pkgdocdir}/contrib/{contacts,credential,svn-fe}/
+rm -rf %{buildroot}%{_pkgdocdir}/contrib/{contacts,credential}/
 cp -p gitweb/INSTALL %{buildroot}%{_pkgdocdir}/INSTALL.gitweb
 cp -p gitweb/README %{buildroot}%{_pkgdocdir}/README.gitweb
 
@@ -911,10 +929,10 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 # endif use_systemd
 
 %files -f bin-man-doc-git-files
-%if %{emacs_filesystem}
+%if %{with emacs} && %{emacs_filesystem}
 %{elispdir}
 %endif
-# endif emacs_filesystem
+# endif with emacs && emacs_filesystem
 %{_datadir}/git-core/contrib/diff-highlight
 %{_datadir}/git-core/contrib/hooks/multimail
 %{_datadir}/git-core/contrib/hooks/update-paranoid
@@ -981,12 +999,12 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_mandir}/man1/git-daemon*.1*}
 %{?with_docs:%{_pkgdocdir}/git-daemon*.html}
 
-%if ! %{emacs_filesystem}
+%if %{with emacs} && ! %{emacs_filesystem}
 %files -n emacs-git
 %{_pkgdocdir}/contrib/emacs/README
 %{elispdir}
 %endif
-# endif ! emacs_filesystem
+# endif with emacs && ! emacs_filesystem
 
 %files email
 %{_pkgdocdir}/*email*.txt
@@ -1058,6 +1076,20 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Mon Oct 19 2020 Todd Zullinger <tmz@pobox.com> - 2.29.0-1
+- update to 2.29.0
+
+* Thu Oct 15 2020 Todd Zullinger <tmz@pobox.com> - 2.29.0-0.2.rc2
+- update to 2.29.0-rc2
+
+* Fri Oct 09 2020 Todd Zullinger <tmz@pobox.com> - 2.29.0-0.1.rc1
+- update to 2.29.0-rc1
+- drop emacs-git stub for fedora >= 34 (#1882360)
+- adjust python hashbang in contrib/hg-to-git, it supports python3
+
+* Mon Oct 05 2020 Todd Zullinger <tmz@pobox.com> - 2.29.0-0.0.rc0
+- update to 2.29.0-rc0
+
 * Mon Jul 27 2020 Todd Zullinger <tmz@pobox.com> - 2.28.0-1
 - update to 2.28.0
 
