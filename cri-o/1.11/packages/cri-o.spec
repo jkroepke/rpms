@@ -17,7 +17,7 @@
 # https://github.com/cri-o/cri-o
 %global provider_prefix %{provider}.%{provider_tld}/%{project}/%{repo}
 %global import_path %{provider_prefix}
-%global commit0 8be0c528c3a64e0c647f50a92b352d9fa85fa99a
+%global commit0 5218c7371c2911663c1cc687c7baaa0df5921e0c
 %global shortcommit0 %(c=%{commit0}; echo ${c:0:7})
 %global git0 https://%{import_path}
 
@@ -25,7 +25,7 @@
 
 Name: %{repo}
 Version: 1.11.16
-Release: 0.12.rhaos3.11.git%{shortcommit0}%{?dist}
+Release: 0.13.rhaos3.11.git%{shortcommit0}%{?dist}
 Summary: Kubernetes Container Runtime Interface for OCI-based containers
 License: ASL 2.0
 URL: %{git0}
@@ -167,6 +167,10 @@ export GOPATH=%{buildroot}/%{gopath}:$(pwd)/Godeps/_workspace:%{gopath}
 
 
 %changelog
+* Tue Oct 13 2020 Peter Hunt <pehunt@redhat.com> - 1.11.16-0.13.rhaos3.11.git5218c73
+- bump to 5218c73
+- Resolves: #1867463
+
 * Wed Sep 02 2020 Peter Hunt <pehunt@redhat.com> - 1.11.16-0.12.rhaos3.11.git9c0200f
 - bump to v1.11.16
 
