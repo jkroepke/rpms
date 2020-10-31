@@ -96,7 +96,7 @@
 #global rcrev   .rc0
 
 Name:           git
-Version:        2.29.0
+Version:        2.29.2
 Release:        1%{?rcrev}%{?dist}
 Summary:        Fast Version Control System
 License:        GPLv2
@@ -1076,6 +1076,13 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Thu Oct 29 2020 Todd Zullinger <tmz@pobox.com> - 2.29.2-1
+- update to 2.29.2
+
+* Sat Oct 24 2020 Todd Zullinger <tmz@pobox.com> - 2.29.1-1
+- update to 2.29.1
+- fix bugs in am/rebase handling of committer ident/date
+
 * Mon Oct 19 2020 Todd Zullinger <tmz@pobox.com> - 2.29.0-1
 - update to 2.29.0
 
