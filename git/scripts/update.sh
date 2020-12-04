@@ -21,8 +21,8 @@ if [ "${VERSION}" != "" ]; then
   if [ -n "${GITHUB_EVENT_PATH+x}" ]; then
     if ! git diff --exit-code; then
       git add -A
-      git config --local user.email "action@github.com"
-      git config --local user.name "GitHub Action"
+      git config --global user.name 'Jan-Otto Kröpke'
+      git config --global user.email 'jkroepke@users.noreply.github.com'
       git commit -m "Update to ${VERSION}"
     fi
   fi
