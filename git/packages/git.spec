@@ -97,7 +97,7 @@
 
 Name:           git
 Version:        2.31.1
-Release:        1%{?rcrev}%{?dist}
+Release:        3%{?rcrev}%{?dist}
 Summary:        Fast Version Control System
 License:        GPLv2
 URL:            https://git-scm.com/
@@ -128,6 +128,11 @@ Source99:       print-failed-test-output
 
 # https://bugzilla.redhat.com/490602
 Patch0:         git-cvsimport-Ignore-cvsps-2.2b1-Branches-output.patch
+
+# https://bugzilla.redhat.com/1952030
+# https://lore.kernel.org/git/D99DD9AD-54E5-4357-BA50-8B9CAE23084E@amazon.com/
+# https://github.com/git/git/commit/75555676ad
+Patch1:         0001-builtin-init-db-handle-bare-clones-when-core.bare-se.patch
 
 %if %{with docs}
 # pod2man is needed to build Git.3pm
@@ -964,7 +969,6 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 
 %if %{with libsecret}
 %files credential-libsecret
-%defattr(-,root,root)
 %{gitexecdir}/git-credential-libsecret
 %endif
 # endif with libsecret
@@ -1036,7 +1040,6 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-citool.html}
 
 %files instaweb
-%defattr(-,root,root)
 %{gitexecdir}/git-instaweb
 %{_pkgdocdir}/git-instaweb.txt
 %{?with_docs:%{_mandir}/man1/git-instaweb.1*}
@@ -1070,6 +1073,13 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Wed Apr 21 2021 Todd Zullinger <tmz@pobox.com> - 2.31.1-3
+- apply upstream patch to fix clone --bare segfault
+  Resolves: rhbz#1952030
+
+* Tue Apr 06 2021 Todd Zullinger <tmz@pobox.com> - 2.31.1-2
+- remove two stray %%defattr macros from %%files sections
+
 * Sat Mar 27 2021 Todd Zullinger <tmz@pobox.com> - 2.31.1-1
 - update to 2.31.1
 
