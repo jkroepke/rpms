@@ -1,0 +1,818 @@
+diff --git a/vendor/github.com/containers/image/copy/copy.go b/vendor/github.com/containers/image/copy/copy.go
+index 59354ea38..21f534325 100644
+--- a/vendor/github.com/containers/image/copy/copy.go
++++ b/vendor/github.com/containers/image/copy/copy.go
+@@ -12,7 +12,9 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	"github.com/containers/image/docker/reference"
+ 	"github.com/containers/image/image"
++	"github.com/containers/image/manifest"
+ 	"github.com/containers/image/pkg/compression"
+ 	"github.com/containers/image/signature"
+ 	"github.com/containers/image/transports"
+@@ -206,6 +208,26 @@ func (c *copier) copyOneImage(ctx context.Context, policyContext *signature.Poli
+ 		return errors.Wrapf(err, "Error initializing image from source %s", transports.ImageName(c.rawSource.Reference()))
+ 	}
+ 
++	// If the destination is a digested reference, make a note of that, determine what digest value we're
++	// expecting, and check that the source manifest matches it.
++	destIsDigestedReference := false
++	if named := c.dest.Reference().DockerReference(); named != nil {
++		if digested, ok := named.(reference.Digested); ok {
++			destIsDigestedReference = true
++			sourceManifest, _, err := src.Manifest(ctx)
++			if err != nil {
++				return errors.Wrapf(err, "Error reading manifest from source image")
++			}
++			matches, err := manifest.MatchesDigest(sourceManifest, digested.Digest())
++			if err != nil {
++				return errors.Wrapf(err, "Error computing digest of source image's manifest")
++			}
++			if !matches {
++				return errors.New("Digest of source image's manifest would not match destination reference")
++			}
++		}
++	}
++
+ 	if err := checkImageDestinationForCurrentRuntimeOS(ctx, options.DestinationCtx, src, c.dest); err != nil {
+ 		return err
+ 	}
+@@ -233,7 +255,7 @@ func (c *copier) copyOneImage(ctx context.Context, policyContext *signature.Poli
+ 		manifestUpdates: &types.ManifestUpdateOptions{InformationOnly: types.ManifestUpdateInformation{Destination: c.dest}},
+ 		src:             src,
+ 		// diffIDsAreNeeded is computed later
+-		canModifyManifest: len(sigs) == 0,
++		canModifyManifest: len(sigs) == 0 && !destIsDigestedReference,
+ 	}
+ 
+ 	if err := ic.updateEmbeddedDockerReference(); err != nil {
+@@ -258,7 +280,7 @@ func (c *copier) copyOneImage(ctx context.Context, policyContext *signature.Poli
+ 	// and at least with the OpenShift registry "acceptschema2" option, there is no way to detect the support
+ 	// without actually trying to upload something and getting a types.ManifestTypeRejectedError.
+ 	// So, try the preferred manifest MIME type. If the process succeeds, fine…
+-	manifest, err := ic.copyUpdatedConfigAndManifest(ctx)
++	manifestBytes, err := ic.copyUpdatedConfigAndManifest(ctx)
+ 	if err != nil {
+ 		logrus.Debugf("Writing manifest using preferred type %s failed: %v", preferredManifestMIMEType, err)
+ 		// … if it fails, _and_ the failure is because the manifest is rejected, we may have other options.
+@@ -289,7 +311,7 @@ func (c *copier) copyOneImage(ctx context.Context, policyContext *signature.Poli
+ 			}
+ 
+ 			// We have successfully uploaded a manifest.
+-			manifest = attemptedManifest
++			manifestBytes = attemptedManifest
+ 			errs = nil // Mark this as a success so that we don't abort below.
+ 			break
+ 		}
+@@ -299,7 +321,7 @@ func (c *copier) copyOneImage(ctx context.Context, policyContext *signature.Poli
+ 	}
+ 
+ 	if options.SignBy != "" {
+-		newSig, err := c.createSignature(manifest, options.SignBy)
++		newSig, err := c.createSignature(manifestBytes, options.SignBy)
+ 		if err != nil {
+ 			return err
+ 		}
+diff --git a/vendor/github.com/containers/image/storage/storage_image.go b/vendor/github.com/containers/image/storage/storage_image.go
+index d1b010a76..c736bae53 100644
+--- a/vendor/github.com/containers/image/storage/storage_image.go
++++ b/vendor/github.com/containers/image/storage/storage_image.go
+@@ -13,6 +13,7 @@ import (
+ 	"path/filepath"
+ 	"sync/atomic"
+ 
++	"github.com/containers/image/docker/reference"
+ 	"github.com/containers/image/image"
+ 	"github.com/containers/image/internal/tmpdir"
+ 	"github.com/containers/image/manifest"
+@@ -66,6 +67,13 @@ type storageImageCloser struct {
+ 	size int64
+ }
+ 
++// manifestBigDataKey returns a key suitable for recording a manifest with the specified digest using storage.Store.ImageBigData and related functions.
++// If a specific manifest digest is explicitly requested by the user, the key retruned function should be used preferably;
++// for compatibility, if a manifest is not available under this key, check also storage.ImageDigestBigDataKey
++func manifestBigDataKey(digest digest.Digest) string {
++	return storage.ImageDigestManifestBigDataNamePrefix + "-" + digest.String()
++}
++
+ // newImageSource sets up an image for reading.
+ func newImageSource(imageRef storageReference) (*storageImageSource, error) {
+ 	// First, locate the image.
+@@ -164,12 +172,29 @@ func (s *storageImageSource) GetManifest(ctx context.Context, instanceDigest *di
+ 		return nil, "", ErrNoManifestLists
+ 	}
+ 	if len(s.cachedManifest) == 0 {
+-		// We stored the manifest as an item named after storage.ImageDigestBigDataKey.
+-		cachedBlob, err := s.imageRef.transport.store.ImageBigData(s.image.ID, storage.ImageDigestBigDataKey)
+-		if err != nil {
+-			return nil, "", err
++		// The manifest is stored as a big data item.
++		// Prefer the manifest corresponding to the user-specified digest, if available.
++		if s.imageRef.named != nil {
++			if digested, ok := s.imageRef.named.(reference.Digested); ok {
++				key := manifestBigDataKey(digested.Digest())
++				blob, err := s.imageRef.transport.store.ImageBigData(s.image.ID, key)
++				if err != nil && !os.IsNotExist(err) { // os.IsNotExist is true if the image exists but there is no data corresponding to key
++					return nil, "", err
++				}
++				if err == nil {
++					s.cachedManifest = blob
++				}
++			}
++		}
++		// If the user did not specify a digest, or this is an old image stored before manifestBigDataKey was introduced, use the default manifest.
++		// Note that the manifest may not match the expected digest, and that is likely to fail eventually, e.g. in c/image/image/UnparsedImage.Manifest().
++		if len(s.cachedManifest) == 0 {
++			cachedBlob, err := s.imageRef.transport.store.ImageBigData(s.image.ID, storage.ImageDigestBigDataKey)
++			if err != nil {
++				return nil, "", err
++			}
++			s.cachedManifest = cachedBlob
+ 		}
+-		s.cachedManifest = cachedBlob
+ 	}
+ 	return s.cachedManifest, manifest.GuessMIMEType(s.cachedManifest), err
+ }
+@@ -600,6 +625,7 @@ func (s *storageImageDestination) Commit(ctx context.Context) error {
+ 		}
+ 		lastLayer = layer.ID
+ 	}
++
+ 	// If one of those blobs was a configuration blob, then we can try to dig out the date when the image
+ 	// was originally created, in case we're just copying it.  If not, no harm done.
+ 	options := &storage.ImageOptions{}
+@@ -607,9 +633,6 @@ func (s *storageImageDestination) Commit(ctx context.Context) error {
+ 		logrus.Debugf("setting image creation date to %s", inspect.Created)
+ 		options.CreationDate = *inspect.Created
+ 	}
+-	if manifestDigest, err := manifest.Digest(s.manifest); err == nil {
+-		options.Digest = manifestDigest
+-	}
+ 	// Create the image record, pointing to the most-recently added layer.
+ 	intendedID := s.imageRef.id
+ 	if intendedID == "" {
+@@ -649,7 +672,7 @@ func (s *storageImageDestination) Commit(ctx context.Context) error {
+ 		if err != nil {
+ 			return errors.Wrapf(err, "error copying non-layer blob %q to image", blob)
+ 		}
+-		if err := s.imageRef.transport.store.SetImageBigData(img.ID, blob.String(), v); err != nil {
++		if err := s.imageRef.transport.store.SetImageBigData(img.ID, blob.String(), v, manifest.Digest); err != nil {
+ 			if _, err2 := s.imageRef.transport.store.DeleteImage(img.ID, true); err2 != nil {
+ 				logrus.Debugf("error deleting incomplete image %q: %v", img.ID, err2)
+ 			}
+@@ -675,9 +698,21 @@ func (s *storageImageDestination) Commit(ctx context.Context) error {
+ 		}
+ 		logrus.Debugf("set names of image %q to %v", img.ID, names)
+ 	}
+-	// Save the manifest.  Use storage.ImageDigestBigDataKey as the item's
+-	// name, so that its digest can be used to locate the image in the Store.
+-	if err := s.imageRef.transport.store.SetImageBigData(img.ID, storage.ImageDigestBigDataKey, s.manifest); err != nil {
++	// Save the manifest.  Allow looking it up by digest by using the key convention defined by the Store.
++	// Record the manifest twice: using a digest-specific key to allow references to that specific digest instance,
++	// and using storage.ImageDigestBigDataKey for future users that don’t specify any digest and for compatibility with older readers.
++	manifestDigest, err := manifest.Digest(s.manifest)
++	if err != nil {
++		return errors.Wrapf(err, "error computing manifest digest")
++	}
++	if err := s.imageRef.transport.store.SetImageBigData(img.ID, manifestBigDataKey(manifestDigest), s.manifest, manifest.Digest); err != nil {
++		if _, err2 := s.imageRef.transport.store.DeleteImage(img.ID, true); err2 != nil {
++			logrus.Debugf("error deleting incomplete image %q: %v", img.ID, err2)
++		}
++		logrus.Debugf("error saving manifest for image %q: %v", img.ID, err)
++		return err
++	}
++	if err := s.imageRef.transport.store.SetImageBigData(img.ID, storage.ImageDigestBigDataKey, s.manifest, manifest.Digest); err != nil {
+ 		if _, err2 := s.imageRef.transport.store.DeleteImage(img.ID, true); err2 != nil {
+ 			logrus.Debugf("error deleting incomplete image %q: %v", img.ID, err2)
+ 		}
+@@ -686,7 +721,7 @@ func (s *storageImageDestination) Commit(ctx context.Context) error {
+ 	}
+ 	// Save the signatures, if we have any.
+ 	if len(s.signatures) > 0 {
+-		if err := s.imageRef.transport.store.SetImageBigData(img.ID, "signatures", s.signatures); err != nil {
++		if err := s.imageRef.transport.store.SetImageBigData(img.ID, "signatures", s.signatures, manifest.Digest); err != nil {
+ 			if _, err2 := s.imageRef.transport.store.DeleteImage(img.ID, true); err2 != nil {
+ 				logrus.Debugf("error deleting incomplete image %q: %v", img.ID, err2)
+ 			}
+@@ -728,9 +763,21 @@ func (s *storageImageDestination) SupportedManifestMIMETypes() []string {
+ }
+ 
+ // PutManifest writes the manifest to the destination.
+-func (s *storageImageDestination) PutManifest(ctx context.Context, manifest []byte) error {
+-	s.manifest = make([]byte, len(manifest))
+-	copy(s.manifest, manifest)
++func (s *storageImageDestination) PutManifest(ctx context.Context, manifestBlob []byte) error {
++	if s.imageRef.named != nil {
++		if digested, ok := s.imageRef.named.(reference.Digested); ok {
++			matches, err := manifest.MatchesDigest(manifestBlob, digested.Digest())
++			if err != nil {
++				return err
++			}
++			if !matches {
++				return fmt.Errorf("Manifest does not match expected digest %s", digested.Digest())
++			}
++		}
++	}
++
++	s.manifest = make([]byte, len(manifestBlob))
++	copy(s.manifest, manifestBlob)
+ 	return nil
+ }
+ 
+diff --git a/vendor/github.com/containers/image/storage/storage_reference.go b/vendor/github.com/containers/image/storage/storage_reference.go
+index 73306b972..c046d9f22 100644
+--- a/vendor/github.com/containers/image/storage/storage_reference.go
++++ b/vendor/github.com/containers/image/storage/storage_reference.go
+@@ -55,7 +55,7 @@ func imageMatchesRepo(image *storage.Image, ref reference.Named) bool {
+ // one present with the same name or ID, and return the image.
+ func (s *storageReference) resolveImage() (*storage.Image, error) {
+ 	var loadedImage *storage.Image
+-	if s.id == "" {
++	if s.id == "" && s.named != nil {
+ 		// Look for an image that has the expanded reference name as an explicit Name value.
+ 		image, err := s.transport.store.Image(s.named.String())
+ 		if image != nil && err == nil {
+@@ -69,7 +69,7 @@ func (s *storageReference) resolveImage() (*storage.Image, error) {
+ 			// though possibly with a different tag or digest, as a Name value, so
+ 			// that the canonical reference can be implicitly resolved to the image.
+ 			images, err := s.transport.store.ImagesByDigest(digested.Digest())
+-			if images != nil && err == nil {
++			if err == nil && len(images) > 0 {
+ 				for _, image := range images {
+ 					if imageMatchesRepo(image, s.named) {
+ 						loadedImage = image
+@@ -97,6 +97,24 @@ func (s *storageReference) resolveImage() (*storage.Image, error) {
+ 			return nil, ErrNoSuchImage
+ 		}
+ 	}
++	// Default to having the image digest that we hand back match the most recently
++	// added manifest...
++	if digest, ok := loadedImage.BigDataDigests[storage.ImageDigestBigDataKey]; ok {
++		loadedImage.Digest = digest
++	}
++	// ... unless the named reference says otherwise, and it matches one of the digests
++	// in the image.  For those cases, set the Digest field to that value, for the
++	// sake of older consumers that don't know there's a whole list in there now.
++	if s.named != nil {
++		if digested, ok := s.named.(reference.Digested); ok {
++			for _, digest := range loadedImage.Digests {
++				if digest == digested.Digest() {
++					loadedImage.Digest = digest
++					break
++				}
++			}
++		}
++	}
+ 	return loadedImage, nil
+ }
+ 
+diff --git a/vendor/github.com/containers/image/storage/storage_transport.go b/vendor/github.com/containers/image/storage/storage_transport.go
+index 8886f9250..35631d8c3 100644
+--- a/vendor/github.com/containers/image/storage/storage_transport.go
++++ b/vendor/github.com/containers/image/storage/storage_transport.go
+@@ -284,11 +284,6 @@ func (s storageTransport) GetStoreImage(store storage.Store, ref types.ImageRefe
+ 		}
+ 	}
+ 	if sref, ok := ref.(*storageReference); ok {
+-		if sref.id != "" {
+-			if img, err := store.Image(sref.id); err == nil {
+-				return img, nil
+-			}
+-		}
+ 		tmpRef := *sref
+ 		if img, err := tmpRef.resolveImage(); err == nil {
+ 			return img, nil
+diff --git a/vendor/github.com/containers/storage/containers.go b/vendor/github.com/containers/storage/containers.go
+index 0a125331d..fa9676b3f 100644
+--- a/vendor/github.com/containers/storage/containers.go
++++ b/vendor/github.com/containers/storage/containers.go
+@@ -71,7 +71,7 @@ type Container struct {
+ type ContainerStore interface {
+ 	FileBasedStore
+ 	MetadataStore
+-	BigDataStore
++	ContainerBigDataStore
+ 	FlaggableStore
+ 
+ 	// Create creates a container that has a specified ID (or generates a
+@@ -446,7 +446,7 @@ func (r *containerStore) BigDataSize(id, key string) (int64, error) {
+ 		return size, nil
+ 	}
+ 	if data, err := r.BigData(id, key); err == nil && data != nil {
+-		if r.SetBigData(id, key, data) == nil {
++		if err = r.SetBigData(id, key, data); err == nil {
+ 			c, ok := r.lookup(id)
+ 			if !ok {
+ 				return -1, ErrContainerUnknown
+@@ -454,6 +454,8 @@ func (r *containerStore) BigDataSize(id, key string) (int64, error) {
+ 			if size, ok := c.BigDataSizes[key]; ok {
+ 				return size, nil
+ 			}
++		} else {
++			return -1, err
+ 		}
+ 	}
+ 	return -1, ErrSizeUnknown
+@@ -474,7 +476,7 @@ func (r *containerStore) BigDataDigest(id, key string) (digest.Digest, error) {
+ 		return d, nil
+ 	}
+ 	if data, err := r.BigData(id, key); err == nil && data != nil {
+-		if r.SetBigData(id, key, data) == nil {
++		if err = r.SetBigData(id, key, data); err == nil {
+ 			c, ok := r.lookup(id)
+ 			if !ok {
+ 				return "", ErrContainerUnknown
+@@ -482,6 +484,8 @@ func (r *containerStore) BigDataDigest(id, key string) (digest.Digest, error) {
+ 			if d, ok := c.BigDataDigests[key]; ok {
+ 				return d, nil
+ 			}
++		} else {
++			return "", err
+ 		}
+ 	}
+ 	return "", ErrDigestUnknown
+diff --git a/vendor/github.com/containers/storage/images.go b/vendor/github.com/containers/storage/images.go
+index b10501b08..9b55d9166 100644
+--- a/vendor/github.com/containers/storage/images.go
++++ b/vendor/github.com/containers/storage/images.go
+@@ -5,6 +5,7 @@ import (
+ 	"io/ioutil"
+ 	"os"
+ 	"path/filepath"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/containers/storage/pkg/ioutils"
+@@ -15,9 +16,13 @@ import (
+ )
+ 
+ const (
+-	// ImageDigestBigDataKey is the name of the big data item whose
+-	// contents we consider useful for computing a "digest" of the
+-	// image, by which we can locate the image later.
++	// ImageDigestManifestBigDataNamePrefix is a prefix of big data item
++	// names which we consider to be manifests, used for computing a
++	// "digest" value for the image as a whole, by which we can locate the
++	// image later.
++	ImageDigestManifestBigDataNamePrefix = "manifest"
++	// ImageDigestBigDataKey is provided for compatibility with older
++	// versions of the image library.  It will be removed in the future.
+ 	ImageDigestBigDataKey = "manifest"
+ )
+ 
+@@ -27,12 +32,19 @@ type Image struct {
+ 	// value which was generated by the library.
+ 	ID string `json:"id"`
+ 
+-	// Digest is a digest value that we can use to locate the image.
++	// Digest is a digest value that we can use to locate the image, if one
++	// was specified at creation-time.
+ 	Digest digest.Digest `json:"digest,omitempty"`
+ 
++	// Digests is a list of digest values of the image's manifests, and
++	// possibly a manually-specified value, that we can use to locate the
++	// image.  If Digest is set, its value is also in this list.
++	Digests []digest.Digest `json:"-"`
++
+ 	// Names is an optional set of user-defined convenience values.  The
+ 	// image can be referred to by its ID or any of its names.  Names are
+-	// unique among images.
++	// unique among images, and are often the text representation of tagged
++	// or canonical references.
+ 	Names []string `json:"names,omitempty"`
+ 
+ 	// TopLayer is the ID of the topmost layer of the image itself, if the
+@@ -90,8 +102,10 @@ type ROImageStore interface {
+ 	// Images returns a slice enumerating the known images.
+ 	Images() ([]Image, error)
+ 
+-	// Images returns a slice enumerating the images which have a big data
+-	// item with the name ImageDigestBigDataKey and the specified digest.
++	// ByDigest returns a slice enumerating the images which have either an
++	// explicitly-set digest, or a big data item with a name that starts
++	// with ImageDigestManifestBigDataNamePrefix, which matches the
++	// specified digest.
+ 	ByDigest(d digest.Digest) ([]*Image, error)
+ }
+ 
+@@ -100,7 +114,7 @@ type ImageStore interface {
+ 	ROImageStore
+ 	RWFileBasedStore
+ 	RWMetadataStore
+-	RWBigDataStore
++	RWImageBigDataStore
+ 	FlaggableStore
+ 
+ 	// Create creates an image that has a specified ID (or a random one) and
+@@ -109,7 +123,8 @@ type ImageStore interface {
+ 	Create(id string, names []string, layer, metadata string, created time.Time, searchableDigest digest.Digest) (*Image, error)
+ 
+ 	// SetNames replaces the list of names associated with an image with the
+-	// supplied values.
++	// supplied values.  The values are expected to be valid normalized
++	// named image references.
+ 	SetNames(id string, names []string) error
+ 
+ 	// Delete removes the record of the image.
+@@ -133,6 +148,7 @@ func copyImage(i *Image) *Image {
+ 	return &Image{
+ 		ID:              i.ID,
+ 		Digest:          i.Digest,
++		Digests:         copyDigestSlice(i.Digests),
+ 		Names:           copyStringSlice(i.Names),
+ 		TopLayer:        i.TopLayer,
+ 		MappedTopLayers: copyStringSlice(i.MappedTopLayers),
+@@ -145,6 +161,17 @@ func copyImage(i *Image) *Image {
+ 	}
+ }
+ 
++func copyImageSlice(slice []*Image) []*Image {
++	if len(slice) > 0 {
++		cp := make([]*Image, len(slice))
++		for i := range slice {
++			cp[i] = copyImage(slice[i])
++		}
++		return cp
++	}
++	return nil
++}
++
+ func (r *imageStore) Images() ([]Image, error) {
+ 	images := make([]Image, len(r.images))
+ 	for i := range r.images {
+@@ -165,6 +192,46 @@ func (r *imageStore) datapath(id, key string) string {
+ 	return filepath.Join(r.datadir(id), makeBigDataBaseName(key))
+ }
+ 
++// bigDataNameIsManifest determines if a big data item with the specified name
++// is considered to be representative of the image, in that its digest can be
++// said to also be the image's digest.  Currently, if its name is, or begins
++// with, "manifest", we say that it is.
++func bigDataNameIsManifest(name string) bool {
++	return strings.HasPrefix(name, ImageDigestManifestBigDataNamePrefix)
++}
++
++// recomputeDigests takes a fixed digest and a name-to-digest map and builds a
++// list of the unique values that would identify the image.
++func (image *Image) recomputeDigests() error {
++	validDigests := make([]digest.Digest, 0, len(image.BigDataDigests)+1)
++	digests := make(map[digest.Digest]struct{})
++	if image.Digest != "" {
++		if err := image.Digest.Validate(); err != nil {
++			return errors.Wrapf(err, "error validating image digest %q", string(image.Digest))
++		}
++		digests[image.Digest] = struct{}{}
++		validDigests = append(validDigests, image.Digest)
++	}
++	for name, digest := range image.BigDataDigests {
++		if !bigDataNameIsManifest(name) {
++			continue
++		}
++		if digest.Validate() != nil {
++			return errors.Wrapf(digest.Validate(), "error validating digest %q for big data item %q", string(digest), name)
++		}
++		// Deduplicate the digest values.
++		if _, known := digests[digest]; !known {
++			digests[digest] = struct{}{}
++			validDigests = append(validDigests, digest)
++		}
++	}
++	if image.Digest == "" && len(validDigests) > 0 {
++		image.Digest = validDigests[0]
++	}
++	image.Digests = validDigests
++	return nil
++}
++
+ func (r *imageStore) Load() error {
+ 	shouldSave := false
+ 	rpath := r.imagespath()
+@@ -187,17 +254,18 @@ func (r *imageStore) Load() error {
+ 					r.removeName(conflict, name)
+ 					shouldSave = true
+ 				}
+-				names[name] = images[n]
+ 			}
+-			// Implicit digest
+-			if digest, ok := image.BigDataDigests[ImageDigestBigDataKey]; ok {
+-				digests[digest] = append(digests[digest], images[n])
++			// Compute the digest list.
++			err = image.recomputeDigests()
++			if err != nil {
++				return errors.Wrapf(err, "error computing digests for image with ID %q (%v)", image.ID, image.Names)
++			}
++			for _, name := range image.Names {
++				names[name] = image
+ 			}
+-			// Explicit digest
+-			if image.Digest == "" {
+-				image.Digest = image.BigDataDigests[ImageDigestBigDataKey]
+-			} else if image.Digest != image.BigDataDigests[ImageDigestBigDataKey] {
+-				digests[image.Digest] = append(digests[image.Digest], images[n])
++			for _, digest := range image.Digests {
++				list := digests[digest]
++				digests[digest] = append(list, image)
+ 			}
+ 		}
+ 	}
+@@ -331,12 +399,12 @@ func (r *imageStore) Create(id string, names []string, layer, metadata string, c
+ 		}
+ 	}
+ 	if _, idInUse := r.byid[id]; idInUse {
+-		return nil, ErrDuplicateID
++		return nil, errors.Wrapf(ErrDuplicateID, "an image with ID %q already exists", id)
+ 	}
+ 	names = dedupeNames(names)
+ 	for _, name := range names {
+-		if _, nameInUse := r.byname[name]; nameInUse {
+-			return nil, ErrDuplicateName
++		if image, nameInUse := r.byname[name]; nameInUse {
++			return nil, errors.Wrapf(ErrDuplicateName, "image name %q is already associated with image %q", name, image.ID)
+ 		}
+ 	}
+ 	if created.IsZero() {
+@@ -346,6 +414,7 @@ func (r *imageStore) Create(id string, names []string, layer, metadata string, c
+ 		image = &Image{
+ 			ID:             id,
+ 			Digest:         searchableDigest,
++			Digests:        nil,
+ 			Names:          names,
+ 			TopLayer:       layer,
+ 			Metadata:       metadata,
+@@ -355,16 +424,20 @@ func (r *imageStore) Create(id string, names []string, layer, metadata string, c
+ 			Created:        created,
+ 			Flags:          make(map[string]interface{}),
+ 		}
++		err := image.recomputeDigests()
++		if err != nil {
++			return nil, errors.Wrapf(err, "error validating digests for new image")
++		}
+ 		r.images = append(r.images, image)
+ 		r.idindex.Add(id)
+ 		r.byid[id] = image
+-		if searchableDigest != "" {
+-			list := r.bydigest[searchableDigest]
+-			r.bydigest[searchableDigest] = append(list, image)
+-		}
+ 		for _, name := range names {
+ 			r.byname[name] = image
+ 		}
++		for _, digest := range image.Digests {
++			list := r.bydigest[digest]
++			r.bydigest[digest] = append(list, image)
++		}
+ 		err = r.Save()
+ 		image = copyImage(image)
+ 	}
+@@ -442,6 +515,14 @@ func (r *imageStore) Delete(id string) error {
+ 	for _, name := range image.Names {
+ 		delete(r.byname, name)
+ 	}
++	for _, digest := range image.Digests {
++		prunedList := imageSliceWithoutValue(r.bydigest[digest], image)
++		if len(prunedList) == 0 {
++			delete(r.bydigest, digest)
++		} else {
++			r.bydigest[digest] = prunedList
++		}
++	}
+ 	if toDeleteIndex != -1 {
+ 		// delete the image at toDeleteIndex
+ 		if toDeleteIndex == len(r.images)-1 {
+@@ -450,28 +531,6 @@ func (r *imageStore) Delete(id string) error {
+ 			r.images = append(r.images[:toDeleteIndex], r.images[toDeleteIndex+1:]...)
+ 		}
+ 	}
+-	if digest, ok := image.BigDataDigests[ImageDigestBigDataKey]; ok {
+-		// remove the image from the digest-based index
+-		if list, ok := r.bydigest[digest]; ok {
+-			prunedList := imageSliceWithoutValue(list, image)
+-			if len(prunedList) == 0 {
+-				delete(r.bydigest, digest)
+-			} else {
+-				r.bydigest[digest] = prunedList
+-			}
+-		}
+-	}
+-	if image.Digest != "" {
+-		// remove the image's hard-coded digest from the digest-based index
+-		if list, ok := r.bydigest[image.Digest]; ok {
+-			prunedList := imageSliceWithoutValue(list, image)
+-			if len(prunedList) == 0 {
+-				delete(r.bydigest, image.Digest)
+-			} else {
+-				r.bydigest[image.Digest] = prunedList
+-			}
+-		}
+-	}
+ 	if err := r.Save(); err != nil {
+ 		return err
+ 	}
+@@ -502,7 +561,7 @@ func (r *imageStore) Exists(id string) bool {
+ 
+ func (r *imageStore) ByDigest(d digest.Digest) ([]*Image, error) {
+ 	if images, ok := r.bydigest[d]; ok {
+-		return images, nil
++		return copyImageSlice(images), nil
+ 	}
+ 	return nil, ErrImageUnknown
+ }
+@@ -533,15 +592,7 @@ func (r *imageStore) BigDataSize(id, key string) (int64, error) {
+ 		return size, nil
+ 	}
+ 	if data, err := r.BigData(id, key); err == nil && data != nil {
+-		if r.SetBigData(id, key, data) == nil {
+-			image, ok := r.lookup(id)
+-			if !ok {
+-				return -1, ErrImageUnknown
+-			}
+-			if size, ok := image.BigDataSizes[key]; ok {
+-				return size, nil
+-			}
+-		}
++		return int64(len(data)), nil
+ 	}
+ 	return -1, ErrSizeUnknown
+ }
+@@ -560,17 +611,6 @@ func (r *imageStore) BigDataDigest(id, key string) (digest.Digest, error) {
+ 	if d, ok := image.BigDataDigests[key]; ok {
+ 		return d, nil
+ 	}
+-	if data, err := r.BigData(id, key); err == nil && data != nil {
+-		if r.SetBigData(id, key, data) == nil {
+-			image, ok := r.lookup(id)
+-			if !ok {
+-				return "", ErrImageUnknown
+-			}
+-			if d, ok := image.BigDataDigests[key]; ok {
+-				return d, nil
+-			}
+-		}
+-	}
+ 	return "", ErrDigestUnknown
+ }
+ 
+@@ -593,7 +633,7 @@ func imageSliceWithoutValue(slice []*Image, value *Image) []*Image {
+ 	return modified
+ }
+ 
+-func (r *imageStore) SetBigData(id, key string, data []byte) error {
++func (r *imageStore) SetBigData(id, key string, data []byte, digestManifest func([]byte) (digest.Digest, error)) error {
+ 	if key == "" {
+ 		return errors.Wrapf(ErrInvalidBigDataName, "can't set empty name for image big data item")
+ 	}
+@@ -604,10 +644,22 @@ func (r *imageStore) SetBigData(id, key string, data []byte) error {
+ 	if !ok {
+ 		return ErrImageUnknown
+ 	}
+-	if err := os.MkdirAll(r.datadir(image.ID), 0700); err != nil {
++	err := os.MkdirAll(r.datadir(image.ID), 0700)
++	if err != nil {
+ 		return err
+ 	}
+-	err := ioutils.AtomicWriteFile(r.datapath(image.ID, key), data, 0600)
++	var newDigest digest.Digest
++	if bigDataNameIsManifest(key) {
++		if digestManifest == nil {
++			return errors.Wrapf(ErrDigestUnknown, "error digesting manifest: no manifest digest callback provided")
++		}
++		if newDigest, err = digestManifest(data); err != nil {
++			return errors.Wrapf(err, "error digesting manifest")
++		}
++	} else {
++		newDigest = digest.Canonical.FromBytes(data)
++	}
++	err = ioutils.AtomicWriteFile(r.datapath(image.ID, key), data, 0600)
+ 	if err == nil {
+ 		save := false
+ 		if image.BigDataSizes == nil {
+@@ -619,7 +671,6 @@ func (r *imageStore) SetBigData(id, key string, data []byte) error {
+ 			image.BigDataDigests = make(map[string]digest.Digest)
+ 		}
+ 		oldDigest, digestOk := image.BigDataDigests[key]
+-		newDigest := digest.Canonical.FromBytes(data)
+ 		image.BigDataDigests[key] = newDigest
+ 		if !sizeOk || oldSize != image.BigDataSizes[key] || !digestOk || oldDigest != newDigest {
+ 			save = true
+@@ -635,20 +686,21 @@ func (r *imageStore) SetBigData(id, key string, data []byte) error {
+ 			image.BigDataNames = append(image.BigDataNames, key)
+ 			save = true
+ 		}
+-		if key == ImageDigestBigDataKey {
+-			if oldDigest != "" && oldDigest != newDigest && oldDigest != image.Digest {
+-				// remove the image from the list of images in the digest-based
+-				// index which corresponds to the old digest for this item, unless
+-				// it's also the hard-coded digest
+-				if list, ok := r.bydigest[oldDigest]; ok {
+-					prunedList := imageSliceWithoutValue(list, image)
+-					if len(prunedList) == 0 {
+-						delete(r.bydigest, oldDigest)
+-					} else {
+-						r.bydigest[oldDigest] = prunedList
+-					}
++		for _, oldDigest := range image.Digests {
++			// remove the image from the list of images in the digest-based index
++			if list, ok := r.bydigest[oldDigest]; ok {
++				prunedList := imageSliceWithoutValue(list, image)
++				if len(prunedList) == 0 {
++					delete(r.bydigest, oldDigest)
++				} else {
++					r.bydigest[oldDigest] = prunedList
+ 				}
+ 			}
++		}
++		if err = image.recomputeDigests(); err != nil {
++			return errors.Wrapf(err, "error loading recomputing image digest information for %s", image.ID)
++		}
++		for _, newDigest := range image.Digests {
+ 			// add the image to the list of images in the digest-based index which
+ 			// corresponds to the new digest for this item, unless it's already there
+ 			list := r.bydigest[newDigest]
+diff --git a/vendor/github.com/containers/storage/store.go b/vendor/github.com/containers/storage/store.go
+index dfc30c43f..6fcd0d498 100644
+--- a/vendor/github.com/containers/storage/store.go
++++ b/vendor/github.com/containers/storage/store.go
+@@ -100,19 +100,21 @@ type ROBigDataStore interface {
+ 	BigDataNames(id string) ([]string, error)
+ }
+ 
+-// A RWBigDataStore wraps up the read-write big-data related methods of the
+-// various types of file-based lookaside stores that we implement.
+-type RWBigDataStore interface {
+-	// SetBigData stores a (potentially large) piece of data associated with this
+-	// ID.
+-	SetBigData(id, key string, data []byte) error
++// A RWImageBigDataStore wraps up how we store big-data associated with images.
++type RWImageBigDataStore interface {
++	// SetBigData stores a (potentially large) piece of data associated
++	// with this ID.
++	// Pass github.com/containers/image/manifest.Digest as digestManifest
++	// to allow ByDigest to find images by their correct digests.
++	SetBigData(id, key string, data []byte, digestManifest func([]byte) (digest.Digest, error)) error
+ }
+ 
+-// A BigDataStore wraps up the most common big-data related methods of the
+-// various types of file-based lookaside stores that we implement.
+-type BigDataStore interface {
++// A ContainerBigDataStore wraps up how we store big-data associated with containers.
++type ContainerBigDataStore interface {
+ 	ROBigDataStore
+-	RWBigDataStore
++	// SetBigData stores a (potentially large) piece of data associated
++	// with this ID.
++	SetBigData(id, key string, data []byte) error
+ }
+ 
+ // A FlaggableStore can have flags set and cleared on items which it manages.
+@@ -350,9 +352,11 @@ type Store interface {
+ 	// of named data associated with an image.
+ 	ImageBigDataDigest(id, key string) (digest.Digest, error)
+ 
+-	// SetImageBigData stores a (possibly large) chunk of named data associated
+-	// with an image.
+-	SetImageBigData(id, key string, data []byte) error
++	// SetImageBigData stores a (possibly large) chunk of named data
++	// associated with an image.  Pass
++	// github.com/containers/image/manifest.Digest as digestManifest to
++	// allow ImagesByDigest to find images by their correct digests.
++	SetImageBigData(id, key string, data []byte, digestManifest func([]byte) (digest.Digest, error)) error
+ 
+ 	// ImageSize computes the size of the image's layers and ancillary data.
+ 	ImageSize(id string) (int64, error)
+@@ -1414,7 +1418,7 @@ func (s *store) ImageBigData(id, key string) ([]byte, error) {
+ 	return nil, ErrImageUnknown
+ }
+ 
+-func (s *store) SetImageBigData(id, key string, data []byte) error {
++func (s *store) SetImageBigData(id, key string, data []byte, digestManifest func([]byte) (digest.Digest, error)) error {
+ 	ristore, err := s.ImageStore()
+ 	if err != nil {
+ 		return err
+@@ -1426,7 +1430,7 @@ func (s *store) SetImageBigData(id, key string, data []byte) error {
+ 		ristore.Load()
+ 	}
+ 
+-	return ristore.SetBigData(id, key, data)
++	return ristore.SetBigData(id, key, data, digestManifest)
+ }
+ 
+ func (s *store) ImageSize(id string) (int64, error) {
+@@ -2976,6 +2980,15 @@ func copyStringDigestMap(m map[string]digest.Digest) map[string]digest.Digest {
+ 	return ret
+ }
+ 
++func copyDigestSlice(slice []digest.Digest) []digest.Digest {
++	if len(slice) == 0 {
++		return nil
++	}
++	ret := make([]digest.Digest, len(slice))
++	copy(ret, slice)
++	return ret
++}
++
+ // copyStringInterfaceMap still forces us to assume that the interface{} is
+ // a non-pointer scalar value
+ func copyStringInterfaceMap(m map[string]interface{}) map[string]interface{} {

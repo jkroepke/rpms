@@ -17,7 +17,7 @@
 # https://github.com/cri-o/cri-o
 %global provider_prefix %{provider}.%{provider_tld}/%{project}/%{repo}
 %global import_path %{provider_prefix}
-%global commit0 5218c7371c2911663c1cc687c7baaa0df5921e0c
+%global commit0 54f9e69c416b63218dafc3d39c3c7274874616bc
 %global shortcommit0 %(c=%{commit0}; echo ${c:0:7})
 %global git0 https://%{import_path}
 
@@ -25,7 +25,7 @@
 
 Name: %{repo}
 Version: 1.11.16
-Release: 0.13.rhaos3.11.git%{shortcommit0}%{?dist}
+Release: 0.16.rhaos3.11.git%{shortcommit0}%{?dist}
 Summary: Kubernetes Container Runtime Interface for OCI-based containers
 License: ASL 2.0
 URL: %{git0}
@@ -38,6 +38,9 @@ Patch0: cri-o-1792243.patch
 %endif
 # https://bugzilla.redhat.com/show_bug.cgi?id=1796066
 Patch1: cri-o-1796066.patch
+# related bug: https://bugzilla.redhat.com/show_bug.cgi?id=1955657
+# patch:       backported.patch
+Patch2: cri-o-1955657.patch
 
 # If go_compiler is not set to 1, there is no virtual provide. Use golang instead.
 BuildRequires: %{?go_compiler:compiler(go-compiler)}%{!?go_compiler:golang}
@@ -167,6 +170,17 @@ export GOPATH=%{buildroot}/%{gopath}:$(pwd)/Godeps/_workspace:%{gopath}
 
 
 %changelog
+* Wed Aug 11 2021 Peter Hunt <pehunt@redhat.com> - 1.11.16-0.16.rhaos3.11.git54f9e69
+- rhbz#1958718: bump to 54f9e69
+
+* Mon Aug 09 2021 Peter Hunt <pehunt@redhat.com> - 1.11.16-0.15.rhaos3.11.gitd7a399f
+- bump to d7a399f2
+- Resolves: rhbz#1965900
+
+* Tue May 25 2021 Jindrich Novy <jnovy@redhat.com> - 1.11.16-0.14.rhaos3.11.git5218c73
+- fix "ImageStatus request got "Manifest does not match provided manifest" when digest is not equal to the sha256 id in name under /var/lib/containers/storage/overlay-images/images.json"
+- Resolves: #1955657
+
 * Tue Oct 13 2020 Peter Hunt <pehunt@redhat.com> - 1.11.16-0.13.rhaos3.11.git5218c73
 - bump to 5218c73
 - Resolves: #1867463
