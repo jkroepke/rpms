@@ -25,5 +25,8 @@ jobs:
       - name: Update golang-github-cpuguy83-go-md2man rpm
         run: ./scripts/update.sh
         working-directory: golang-github-cpuguy83-go-md2man
+      - name: Update java-17-openjdk
+        run: ./scripts/update.sh
+        working-directory: java-17-openjdk
       - name: Push changes
         run: git push
