@@ -79,8 +79,8 @@
 #global rcrev   .rc0
 
 Name:           git
-Version:        2.33.1
-Release:        2%{?rcrev}%{?dist}
+Version:        2.34.1
+Release:        1%{?rcrev}%{?dist}
 Summary:        Fast Version Control System
 License:        GPLv2
 URL:            https://git-scm.com/
@@ -112,9 +112,12 @@ Source99:       print-failed-test-output
 # https://bugzilla.redhat.com/490602
 Patch0:         git-cvsimport-Ignore-cvsps-2.2b1-Branches-output.patch
 
-# fix the broken link in git-bundle.html
-# https://lore.kernel.org/git/20211013032852.959985-1-tmz@pobox.com/
-Patch1:         0001-doc-add-bundle-format-to-TECH_DOCS.patch
+# Fix a few tests and issues with gnupg-2.3
+Patch1:         0001-t-lib-gpg-use-with-colons-when-parsing-gpgsm-output.patch
+Patch2:         0002-t-lib-gpg-reload-gpg-components-after-updating-trust.patch
+Patch3:         0003-t-lib-gpg-kill-all-gpg-components-not-just-gpg-agent.patch
+Patch4:         0004-t4202-match-gpgsm-output-from-GnuPG-2.3.patch
+Patch5:         0005-gpg-interface-match-SIG_CREATED-if-it-s-the-first-li.patch
 
 %if %{with docs}
 # pod2man is needed to build Git.3pm
@@ -215,6 +218,7 @@ BuildRequires:  jgit
 %endif
 # endif fedora (except i386 and s390x)
 BuildRequires:  mod_dav_svn
+BuildRequires:  openssh
 BuildRequires:  perl(App::Prove)
 BuildRequires:  perl(CGI)
 BuildRequires:  perl(CGI::Carp)
@@ -388,14 +392,20 @@ Summary:        Git tools for sending patches via email
 BuildArch:      noarch
 Requires:       git = %{version}-%{release}
 Requires:       perl(Authen::SASL)
-Requires:       perl(Net::SMTP::SSL)
 Requires:       perl(Cwd)
+Requires:       perl(Email::Valid)
+Requires:       perl(File::Spec)
 Requires:       perl(File::Spec::Functions)
 Requires:       perl(File::Temp)
+Requires:       perl(IO::Socket::SSL)
 Requires:       perl(Mail::Address)
+Requires:       perl(MIME::Base64)
+Requires:       perl(MIME::QuotedPrint)
 Requires:       perl(Net::Domain)
 Requires:       perl(Net::SMTP)
+Requires:       perl(Net::SMTP::SSL)
 Requires:       perl(POSIX)
+Requires:       perl(Sys::Hostname)
 Requires:       perl(Term::ANSIColor)
 Requires:       perl(Term::ReadLine)
 Requires:       perl(Text::ParseWords)
@@ -998,6 +1008,17 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Thu Nov 25 2021 Todd Zullinger <tmz@pobox.com> - 2.34.1-1
+- update to 2.34.1
+- fix gpgsm issues with gnupg-2.3
+
+* Mon Nov 15 2021 Todd Zullinger <tmz@pobox.com> - 2.34.0-1
+- update to 2.34.0
+
+* Sun Nov 14 2021 Todd Zullinger <tmz@pobox.com> - 2.33.1-3
+- add more git-email perl dependencies
+- Resolves: rhbz#2020487
+
 * Thu Nov 11 2021 Ondřej Pohořelský <opohorel@redhat.com> - 2.33.1-2
 - add Perl requires to git-email
 - Resolves: rhbz#2020487
