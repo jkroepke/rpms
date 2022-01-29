@@ -39,6 +39,7 @@
 %else
 %bcond_without              python2
 %bcond_with                 python3
+%global build_cflags        %{build_cflags} -fPIC -std=gnu99
 %global gitweb_httpd_conf   git.conf
 %global use_glibc_langpacks 0
 %global use_perl_generators 0
@@ -75,11 +76,14 @@
 %global _hardened_build     1
 %endif
 
+# Set path to the package-notes linker script
+%global _package_note_file  %{_builddir}/%{name}-%{version}/.package_note-%{name}-%{version}-%{release}.%{_arch}.ld
+
 # Define for release candidates
 #global rcrev   .rc0
 
 Name:           git
-Version:        2.34.1
+Version:        2.35.0
 Release:        1%{?rcrev}%{?dist}
 Summary:        Fast Version Control System
 License:        GPLv2
@@ -218,7 +222,7 @@ BuildRequires:  jgit
 %endif
 # endif fedora (except i386 and s390x)
 BuildRequires:  mod_dav_svn
-BuildRequires:  openssh
+BuildRequires:  openssh-clients
 BuildRequires:  perl(App::Prove)
 BuildRequires:  perl(CGI)
 BuildRequires:  perl(CGI::Carp)
@@ -544,6 +548,9 @@ INSTALL_SYMLINKS = 1
 GITWEB_PROJECTROOT = %{_localstatedir}/lib/git
 GNU_ROFF = 1
 NO_PERL_CPAN_FALLBACKS = 1
+%if 0%{?rhel} && 0%{?rhel} < 8
+NO_UNCOMPRESS2 = 1
+%endif
 %if %{with python3}
 PYTHON_PATH = %{__python3}
 %else
@@ -666,6 +673,9 @@ sed "s|@PROJECTROOT@|%{_localstatedir}/lib/git|g" \
 install -Dpm 0755 contrib/diff-highlight/diff-highlight \
     %{buildroot}%{_datadir}/git-core/contrib/diff-highlight
 rm -rf contrib/diff-highlight/{Makefile,diff-highlight,*.perl,t}
+
+# Remove contrib/scalar to avoid cruft in the git-core-doc docdir
+rm -rf contrib/scalar
 
 # Clean up contrib/subtree to avoid cruft in the git-core-doc docdir
 rm -rf contrib/subtree/{INSTALL,Makefile,git-subtree*,t}
@@ -1008,6 +1018,28 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Mon Jan 24 2022 Todd Zullinger <tmz@pobox.com> - 2.35.0-1
+- update to 2.35.0
+- set path to linker script in %%_package_note_file
+
+* Sat Jan 22 2022 Todd Zullinger <tmz@pobox.com> - 2.35.0-0.2.rc2.3
+- remove contrib/scalar to avoid cruft in git-core-doc
+
+* Fri Jan 21 2022 Todd Zullinger <tmz@pobox.com> - 2.35.0-0.2.rc2.2
+- fix compilation on EL7
+
+* Thu Jan 20 2022 Todd Zullinger <tmz@pobox.com> - 2.35.0-0.2.rc2.1
+- checkout: avoid BUG() when hitting a broken repository (rhbz#2042920)
+
+* Wed Jan 19 2022 Todd Zullinger <tmz@pobox.com> - 2.35.0-0.2.rc2
+- update to 2.35.0-rc2
+
+* Sat Jan 15 2022 Todd Zullinger <tmz@pobox.com> - 2.35.0-0.1.rc1
+- update to 2.35.0-rc1
+
+* Mon Jan 10 2022 Todd Zullinger <tmz@pobox.com> - 2.35.0-0.0.rc0
+- update to 2.35.0-rc0
+
 * Thu Nov 25 2021 Todd Zullinger <tmz@pobox.com> - 2.34.1-1
 - update to 2.34.1
 - fix gpgsm issues with gnupg-2.3
