@@ -9,7 +9,6 @@ It's periodically scrape the git source rpm from fedora rawhide and compiles it 
 * [cri-tools 1.11](./cri-tools/1.11)
 * [git](./git)
 * [golang-github-cpuguy83-go-md2man](./golang-github-cpuguy83-go-md2man)
-* [java-17-openjdk](./java-17-openjdk)
 
 ## Build infrastructure
 
