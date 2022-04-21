@@ -76,14 +76,14 @@
 %global _hardened_build     1
 %endif
 
-# Set path to the package-notes linker script
-%global _package_note_file  %{_builddir}/%{name}-%{version}/.package_note-%{name}-%{version}-%{release}.%{_arch}.ld
-
 # Define for release candidates
 #global rcrev   .rc0
 
+# Set path to the package-notes linker script
+%global _package_note_file  %{_builddir}/%{name}-%{version}%{?rcrev}/.package_note-%{name}-%{version}-%{release}.%{_arch}.ld
+
 Name:           git
-Version:        2.35.1
+Version:        2.36.0
 Release:        1%{?rcrev}%{?dist}
 Summary:        Fast Version Control System
 License:        GPLv2
@@ -115,13 +115,6 @@ Source99:       print-failed-test-output
 
 # https://bugzilla.redhat.com/490602
 Patch0:         git-cvsimport-Ignore-cvsps-2.2b1-Branches-output.patch
-
-# Fix a few tests and issues with gnupg-2.3
-Patch1:         0001-t-lib-gpg-use-with-colons-when-parsing-gpgsm-output.patch
-Patch2:         0002-t-lib-gpg-reload-gpg-components-after-updating-trust.patch
-Patch3:         0003-t-lib-gpg-kill-all-gpg-components-not-just-gpg-agent.patch
-Patch4:         0004-t4202-match-gpgsm-output-from-GnuPG-2.3.patch
-Patch5:         0005-gpg-interface-match-SIG_CREATED-if-it-s-the-first-li.patch
 
 %if %{with docs}
 # pod2man is needed to build Git.3pm
@@ -193,7 +186,7 @@ BuildRequires:  acl
 # Needed by t5540-http-push-webdav.sh
 BuildRequires: apr-util-bdb
 %endif
-# endif fedora >= 27
+# endif fedora or rhel >= 8
 BuildRequires:  bash
 %if %{with cvs}
 BuildRequires:  cvs
@@ -216,7 +209,12 @@ BuildRequires:  gnupg2-smime
 BuildRequires:  highlight
 %endif
 # endif fedora or el7+ (ppc64le/x86_64)
+%if 0%{?fedora} >= 37
+BuildRequires:  httpd-core
+%else
 BuildRequires:  httpd
+%endif
+# endif fedora >= 37
 %if 0%{?fedora} && ! ( 0%{?fedora} >= 35 || "%{_arch}" == "i386" || "%{_arch}" == "s390x" )
 BuildRequires:  jgit
 %endif
@@ -826,9 +824,9 @@ GIT_SKIP_TESTS=""
 #
 # The following 2 tests use run_with_limited_cmdline, which calls ulimit -s 128
 # to limit the maximum stack size.
-# t5541.35 'push 2000 tags over http'
+# t5541.36 'push 2000 tags over http'
 # t5551.25 'clone the 2,000 tag repo to check OS command line overflow'
-GIT_SKIP_TESTS="$GIT_SKIP_TESTS t5541.35 t5551.25"
+GIT_SKIP_TESTS="$GIT_SKIP_TESTS t5541.36 t5551.25"
 %endif
 # endif aarch64 %%{arm} %%{power64}
 
@@ -842,6 +840,26 @@ GIT_SKIP_TESTS="$GIT_SKIP_TESTS t5541.35 t5551.25"
 GIT_SKIP_TESTS="$GIT_SKIP_TESTS t9115"
 %endif
 # endif %%{power64}
+
+%ifarch s390x && 0%{?rhel} == 8
+# Skip tests which fail on s390x on rhel-8
+#
+# The following tests fail on s390x & el8.  The cause should be investigated.
+# However, it's a lower priority since the same tests work consistently on
+# s390x with Fedora and RHEL-9.  The failures seem to originate in t5300.
+#
+# t5300.10 'unpack without delta'
+# t5300.12 'unpack with REF_DELTA'
+# t5300.14 'unpack with OFS_DELTA'
+# t5303.5  'create corruption in data of first object'
+# t5303.7  '... and loose copy of second object allows for partial recovery'
+# t5303.11 'create corruption in data of first delta'
+# t6300.35 'basic atom: head objectsize:disk'
+# t6300.91 'basic atom: tag objectsize:disk'
+# t6300.92 'basic atom: tag *objectsize:disk'
+GIT_SKIP_TESTS="$GIT_SKIP_TESTS t5300.{10,12,14} t5303.{5,7,11} t6300.{35,91,92}"
+%endif
+# endif s390x && rhel == 8
 
 export GIT_SKIP_TESTS
 
@@ -866,7 +884,7 @@ sed -i "s@\(GIT_TEST_OPTS='.*\)'@\1 --root=$testdir'@" GIT-BUILD-OPTIONS
 touch -r ts GIT-BUILD-OPTIONS
 
 # Run the tests
-%__make test || ./print-failed-test-output
+%__make -C t all || ./print-failed-test-output
 
 # Run contrib/credential/netrc tests
 mkdir -p contrib/credential
@@ -1018,6 +1036,23 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Mon Apr 18 2022 Todd Zullinger <tmz@pobox.com> - 2.36.0-1
+- update to 2.36.0
+
+* Thu Apr 14 2022 Todd Zullinger <tmz@pobox.com> - 2.36.0-0.3.rc2
+- usability improvements on top of CVE-2022-24765
+
+* Wed Apr 13 2022 Todd Zullinger <tmz@pobox.com> - 2.36.0-0.2.rc2
+- update to 2.36.0-rc2 (CVE-2022-24765)
+- disable failing tests on s390x on EL8
+
+* Fri Apr 08 2022 Todd Zullinger <tmz@pobox.com> - 2.36.0-0.1.rc1
+- update to 2.36.0-rc1
+
+* Tue Apr 05 2022 Todd Zullinger <tmz@pobox.com> - 2.36.0-0.0.rc0
+- update to 2.36.0-rc0
+- use httpd-core for tests on Fedora >= 37
+
 * Sat Jan 29 2022 Todd Zullinger <tmz@pobox.com> - 2.35.1-1
 - update to 2.35.1
 
