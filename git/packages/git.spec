@@ -84,7 +84,7 @@
 
 Name:           git
 Version:        2.36.1
-Release:        1%{?rcrev}%{?dist}
+Release:        1%{?rcrev}%{?dist}.2
 Summary:        Fast Version Control System
 License:        GPLv2
 URL:            https://git-scm.com/
@@ -1036,6 +1036,12 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Fri Jun 03 2022 Jitka Plesnikova <jplesnik@redhat.com> - 2.36.1-1.2
+- Perl 5.36 re-rebuild of bootstrapped packages
+
+* Wed Jun 01 2022 Jitka Plesnikova <jplesnik@redhat.com> - 2.36.1-1.1
+- Perl 5.36 rebuild
+
 * Fri May 06 2022 Todd Zullinger <tmz@pobox.com> - 2.36.1-1
 - update to 2.36.1
 
