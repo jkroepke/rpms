@@ -6,13 +6,6 @@
 
 %global gitexecdir          %{_libexecdir}/git-core
 
-# Settings for Fedora >= 34
-%if 0%{?fedora} >= 34
-%bcond_with                 emacs
-%else
-%bcond_without              emacs
-%endif
-
 # Settings for Fedora
 %if 0%{?fedora}
 # linkchecker is not available on EL
@@ -83,8 +76,8 @@
 %global _package_note_file  %{_builddir}/%{name}-%{version}%{?rcrev}/.package_note-%{name}-%{version}-%{release}.%{_arch}.ld
 
 Name:           git
-Version:        2.36.1
-Release:        1%{?rcrev}%{?dist}.2
+Version:        2.37.0
+Release:        1%{?rcrev}%{?dist}
 Summary:        Fast Version Control System
 License:        GPLv2
 URL:            https://git-scm.com/
@@ -137,10 +130,6 @@ BuildRequires:  linkchecker
 BuildRequires:  coreutils
 BuildRequires:  desktop-file-utils
 BuildRequires:  diffutils
-%if %{with emacs}
-BuildRequires:  emacs-common
-%endif
-# endif emacs-common
 %if 0%{?rhel} && 0%{?rhel} < 9
 # Require epel-rpm-macros for the %%gpgverify macro on EL-7/EL-8, and
 # %%build_cflags & %%build_ldflags on EL-7.
@@ -266,17 +255,6 @@ Requires:       perl(Term::ReadKey)
 %endif
 # endif ! defined perl_bootstrap
 Requires:       perl-Git = %{version}-%{release}
-
-%if %{with emacs} && %{defined _emacs_version}
-Requires:       emacs-filesystem >= %{_emacs_version}
-%endif
-# endif with emacs && defined _emacs_version
-
-# Obsolete emacs-git if it's disabled
-%if %{without emacs}
-Obsoletes:      emacs-git < %{?epoch:%{epoch}:}%{version}-%{release}
-%endif
-# endif without emacs
 
 # Obsolete git-cvs if it's disabled
 %if %{without cvs}
@@ -636,19 +614,6 @@ sed -i -e '1s@#!\( */usr/bin/env python\|%{__python2}\)$@#!%{__python3}@' \
 
 %make_install -C contrib/contacts
 
-%if %{with emacs}
-%global elispdir %{_emacs_sitelispdir}/git
-pushd contrib/emacs >/dev/null
-for el in *.el ; do
-    # Note: No byte-compiling is done.  These .el files are one-line stubs
-    # which only serve to point users to better alternatives.
-    install -Dpm 644 $el %{buildroot}%{elispdir}/$el
-    rm -f $el # clean up to avoid cruft in git-core-doc
-done
-popd >/dev/null
-%endif
-# endif with emacs
-
 %if %{with libsecret}
 install -pm 755 contrib/credential/libsecret/git-credential-libsecret \
     %{buildroot}%{gitexecdir}
@@ -841,7 +806,7 @@ GIT_SKIP_TESTS="$GIT_SKIP_TESTS t9115"
 %endif
 # endif %%{power64}
 
-%ifarch s390x && 0%{?rhel} == 8
+%if 0%{?rhel} == 8 && "%{_arch}" == "s390x"
 # Skip tests which fail on s390x on rhel-8
 #
 # The following tests fail on s390x & el8.  The cause should be investigated.
@@ -850,16 +815,26 @@ GIT_SKIP_TESTS="$GIT_SKIP_TESTS t9115"
 #
 # t5300.10 'unpack without delta'
 # t5300.12 'unpack with REF_DELTA'
+# t5300.13 'unpack with REF_DELTA'
 # t5300.14 'unpack with OFS_DELTA'
+# t5300.18 'compare delta flavors'
+# t5300.20 'use packed deltified (REF_DELTA) objects'
+# t5300.23 'verify pack'
+# t5300.24 'verify pack -v'
+# t5300.25 'verify-pack catches mismatched .idx and .pack files'
+# t5300.29 'verify-pack catches a corrupted sum of the index file itself'
+# t5300.30 'build pack index for an existing pack'
+# t5300.45 'make sure index-pack detects the SHA1 collision'
+# t5300.46 'make sure index-pack detects the SHA1 collision (large blobs)'
 # t5303.5  'create corruption in data of first object'
 # t5303.7  '... and loose copy of second object allows for partial recovery'
 # t5303.11 'create corruption in data of first delta'
 # t6300.35 'basic atom: head objectsize:disk'
 # t6300.91 'basic atom: tag objectsize:disk'
 # t6300.92 'basic atom: tag *objectsize:disk'
-GIT_SKIP_TESTS="$GIT_SKIP_TESTS t5300.{10,12,14} t5303.{5,7,11} t6300.{35,91,92}"
+GIT_SKIP_TESTS="$GIT_SKIP_TESTS t5300.1[02348] t5300.2[03459] t5300.30 t5300.4[56] t5303.[57] t5303.11 t6300.35 t6300.9[12]"
 %endif
-# endif s390x && rhel == 8
+# endif rhel == 8 && arch == s390x
 
 export GIT_SKIP_TESTS
 
@@ -905,10 +880,6 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %systemd_postun_with_restart git.socket
 
 %files -f bin-man-doc-git-files
-%if %{with emacs}
-%{elispdir}
-%endif
-# endif with emacs
 %{_datadir}/git-core/contrib/diff-highlight
 %{_datadir}/git-core/contrib/hooks/update-paranoid
 %{_datadir}/git-core/contrib/hooks/setgitperms.perl
@@ -1036,6 +1007,20 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Mon Jun 27 2022 Todd Zullinger <tmz@pobox.com> - 2.37.0-1
+- update to 2.37.0
+
+* Wed Jun 22 2022 Todd Zullinger <tmz@pobox.com> - 2.37.0-0.2.rc2
+- update to 2.37.0-rc2
+
+* Fri Jun 17 2022 Todd Zullinger <tmz@pobox.com> - 2.37.0-0.1.rc1
+- update to 2.37.0-rc1
+
+* Tue Jun 14 2022 Todd Zullinger <tmz@pobox.com> - 2.37.0-0.0.rc0
+- update to 2.37.0-rc0
+- fix GIT_SKIP_TESTS for EL8 s390x
+- remove --with/--without emacs build conditional
+
 * Fri Jun 03 2022 Jitka Plesnikova <jplesnik@redhat.com> - 2.36.1-1.2
 - Perl 5.36 re-rebuild of bootstrapped packages
 
