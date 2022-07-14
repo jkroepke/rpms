@@ -76,7 +76,7 @@
 %global _package_note_file  %{_builddir}/%{name}-%{version}%{?rcrev}/.package_note-%{name}-%{version}-%{release}.%{_arch}.ld
 
 Name:           git
-Version:        2.37.0
+Version:        2.37.1
 Release:        1%{?rcrev}%{?dist}
 Summary:        Fast Version Control System
 License:        GPLv2
@@ -1007,6 +1007,9 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Tue Jul 12 2022 Todd Zullinger <tmz@pobox.com> - 2.37.1-1
+- update to 2.37.1 (CVE-2022-29187)
+
 * Mon Jun 27 2022 Todd Zullinger <tmz@pobox.com> - 2.37.0-1
 - update to 2.37.0
 
