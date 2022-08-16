@@ -76,7 +76,7 @@
 %global _package_note_file  %{_builddir}/%{name}-%{version}%{?rcrev}/.package_note-%{name}-%{version}-%{release}.%{_arch}.ld
 
 Name:           git
-Version:        2.37.1
+Version:        2.37.2
 Release:        1%{?rcrev}%{?dist}
 Summary:        Fast Version Control System
 License:        GPLv2
@@ -161,8 +161,11 @@ BuildRequires:  perl
 # endif use_perl_interpreter
 BuildRequires:  pkgconfig(bash-completion)
 BuildRequires:  sed
-# For macros
+%if 0%{?fedora} || 0%{?rhel} >= 8
+BuildRequires:  systemd-rpm-macros
+%else
 BuildRequires:  systemd
+%endif
 BuildRequires:  tcl
 BuildRequires:  tk
 BuildRequires:  xz
@@ -360,10 +363,7 @@ Requires:       perl(DBD::SQLite)
 %package daemon
 Summary:        Git protocol daemon
 Requires:       git-core = %{version}-%{release}
-Requires:       systemd
-Requires(post): systemd
-Requires(preun):  systemd
-Requires(postun): systemd
+%{?systemd_requires}
 %description daemon
 The git daemon for supporting git:// access to git repositories
 
@@ -1007,6 +1007,15 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Thu Aug 11 2022 Todd Zullinger <tmz@pobox.com> - 2.37.2-1
+- update to 2.37.2
+
+* Sat Jul 23 2022 Todd Zullinger <tmz@pobox.com> - 2.37.1-2
+- require systemd-rpm-macros rather than systemd
+
+* Thu Jul 21 2022 Fedora Release Engineering <releng@fedoraproject.org> - 2.37.1-1.1
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_37_Mass_Rebuild
+
 * Tue Jul 12 2022 Todd Zullinger <tmz@pobox.com> - 2.37.1-1
 - update to 2.37.1 (CVE-2022-29187)
 
