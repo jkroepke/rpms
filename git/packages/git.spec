@@ -76,7 +76,7 @@
 %global _package_note_file  %{_builddir}/%{name}-%{version}%{?rcrev}/.package_note-%{name}-%{version}-%{release}.%{_arch}.ld
 
 Name:           git
-Version:        2.37.2
+Version:        2.37.3
 Release:        1%{?rcrev}%{?dist}
 Summary:        Fast Version Control System
 License:        GPLv2
@@ -108,6 +108,16 @@ Source99:       print-failed-test-output
 
 # https://bugzilla.redhat.com/490602
 Patch0:         git-cvsimport-Ignore-cvsps-2.2b1-Branches-output.patch
+
+# https://bugzilla.redhat.com/2114531
+# tests: try harder to find open ports for apache, git, and svn
+#
+# https://github.com/tmzullinger/git/commit/aedeaaf788
+Patch1:         0001-t-lib-httpd-try-harder-to-find-a-port-for-apache.patch
+# https://github.com/tmzullinger/git/commit/16750d024c
+Patch2:         0002-t-lib-git-daemon-try-harder-to-find-a-port.patch
+# https://github.com/tmzullinger/git/commit/aa5105dc11
+Patch3:         0003-t-lib-git-svn-try-harder-to-find-a-port.patch
 
 %if %{with docs}
 # pod2man is needed to build Git.3pm
@@ -496,8 +506,10 @@ xz -dc '%{SOURCE0}' | %{gpgverify} --keyring='%{SOURCE2}' --signature='%{SOURCE1
 # Install print-failed-test-output script
 install -p -m 755 %{SOURCE99} print-failed-test-output
 
-# Remove git-archimport from command list
+# Remove git-archimport
+sed -i '/^SCRIPT_PERL += git-archimport\.perl$/d' Makefile
 sed -i '/^git-archimport/d' command-list.txt
+rm git-archimport.perl Documentation/git-archimport.txt
 
 %if %{without cvs}
 # Remove git-cvs* from command list
@@ -643,9 +655,6 @@ rm -rf contrib/scalar
 # Clean up contrib/subtree to avoid cruft in the git-core-doc docdir
 rm -rf contrib/subtree/{INSTALL,Makefile,git-subtree*,t}
 
-# git-archimport is not supported
-find %{buildroot} Documentation -type f -name 'git-archimport*' -exec rm -f {} ';'
-
 %if %{without cvs}
 # Remove git-cvs* and gitcvs*
 find %{buildroot} Documentation \( -type f -o -type l \) \
@@ -663,7 +672,7 @@ rm -f %{buildroot}%{gitexecdir}/mergetools/p4merge
 # Remove unneeded git-remote-testsvn so git-svn can be noarch
 rm -f %{buildroot}%{gitexecdir}/git-remote-testsvn
 
-exclude_re="archimport|email|git-(citool|credential-libsecret|cvs|daemon|gui|instaweb|p4|subtree|svn)|gitk|gitweb|p4merge"
+exclude_re="email|git-(citool|credential-libsecret|cvs|daemon|gui|instaweb|p4|subtree|svn)|gitk|gitweb|p4merge"
 (find %{buildroot}{%{_bindir},%{_libexecdir}} -type f -o -type l | grep -vE "$exclude_re" | sed -e s@^%{buildroot}@@) > bin-man-doc-files
 (find %{buildroot}{%{_bindir},%{_libexecdir}} -mindepth 1 -type d | grep -vE "$exclude_re" | sed -e 's@^%{buildroot}@%dir @') >> bin-man-doc-files
 (find %{buildroot}%{perl_vendorlib} -type f | sed -e s@^%{buildroot}@@) > perl-git-files
@@ -794,17 +803,6 @@ GIT_SKIP_TESTS=""
 GIT_SKIP_TESTS="$GIT_SKIP_TESTS t5541.36 t5551.25"
 %endif
 # endif aarch64 %%{arm} %%{power64}
-
-%ifarch %{power64}
-# Skip tests which fail on ppc
-#
-# t9115-git-svn-dcommit-funky-renames is disabled because it frequently fails.
-# The port it uses (9115) is already in use.  It is unclear if this is
-# due to an issue in the test suite or a conflict with some other process on
-# the build host.  It only appears to occur on ppc-arches.
-GIT_SKIP_TESTS="$GIT_SKIP_TESTS t9115"
-%endif
-# endif %%{power64}
 
 %if 0%{?rhel} == 8 && "%{_arch}" == "s390x"
 # Skip tests which fail on s390x on rhel-8
@@ -1007,6 +1005,14 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Tue Aug 30 2022 Todd Zullinger <tmz@pobox.com> - 2.37.3-1
+- update to 2.37.3
+- remove %%changelog entries prior to 2020
+- tests: try harder to find open ports for apache, git, and svn
+
+* Sun Aug 14 2022 Todd Zullinger <tmz@pobox.com> - 2.37.2-2
+- consolidate git-archimport removal in %%prep
+
 * Thu Aug 11 2022 Todd Zullinger <tmz@pobox.com> - 2.37.2-1
 - update to 2.37.2
 
@@ -1193,252 +1199,3 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 
 * Tue Jan 26 2021 Fedora Release Engineering <releng@fedoraproject.org> - 2.30.0-1.1
 - Rebuilt for https://fedoraproject.org/wiki/Fedora_34_Mass_Rebuild
-
-* Mon Dec 28 2020 Todd Zullinger <tmz@pobox.com> - 2.30.0-1
-- update to 2.30.0
-
-* Wed Dec 23 2020 Todd Zullinger <tmz@pobox.com> - 2.30.0-0.2.rc2
-- update to 2.30.0-rc2
-
-* Sat Dec 19 2020 Todd Zullinger <tmz@pobox.com> - 2.30.0-0.1.rc1
-- update to 2.30.0-rc1
-
-* Mon Dec 14 2020 Todd Zullinger <tmz@pobox.com> - 2.30.0-0.0.rc0
-- update to 2.30.0-rc0
-
-* Sun Dec 06 2020 Todd Zullinger <tmz@pobox.com> - 2.29.2-4
-- move git-difftool to git-core, it does not require perl
-
-* Wed Nov 25 2020 Todd Zullinger <tmz@pobox.com> - 2.29.2-3
-- apply upstream patch to resolve git fast-import memory leak (#1900335)
-- add epel-rpm-macros BuildRequires on EL-7 (#1872865)
-
-* Sat Nov 07 2020 Todd Zullinger <tmz@pobox.com> - 2.29.2-2
-- apply upstream patch to resolve git log segfault (#1791810)
-
-* Thu Oct 29 2020 Todd Zullinger <tmz@pobox.com> - 2.29.2-1
-- update to 2.29.2
-
-* Sat Oct 24 2020 Todd Zullinger <tmz@pobox.com> - 2.29.1-1
-- update to 2.29.1
-- fix bugs in am/rebase handling of committer ident/date
-
-* Mon Oct 19 2020 Todd Zullinger <tmz@pobox.com> - 2.29.0-1
-- update to 2.29.0
-
-* Thu Oct 15 2020 Todd Zullinger <tmz@pobox.com> - 2.29.0-0.2.rc2
-- update to 2.29.0-rc2
-
-* Fri Oct 09 2020 Todd Zullinger <tmz@pobox.com> - 2.29.0-0.1.rc1
-- update to 2.29.0-rc1
-- drop emacs-git stub for fedora >= 34 (#1882360)
-- adjust python hashbang in contrib/hg-to-git, it supports python3
-
-* Mon Oct 05 2020 Todd Zullinger <tmz@pobox.com> - 2.29.0-0.0.rc0
-- update to 2.29.0-rc0
-
-* Mon Jul 27 2020 Todd Zullinger <tmz@pobox.com> - 2.28.0-1
-- update to 2.28.0
-
-* Mon Jul 27 2020 Fedora Release Engineering <releng@fedoraproject.org> - 2.28.0-0.3.rc2
-- Rebuilt for https://fedoraproject.org/wiki/Fedora_33_Mass_Rebuild
-
-* Wed Jul 22 2020 Todd Zullinger <tmz@pobox.com> - 2.28.0-0.2.rc2
-- update to 2.28.0-rc2
-
-* Sat Jul 18 2020 Todd Zullinger <tmz@pobox.com> - 2.28.0-0.1.rc1
-- update to 2.28.0-rc1
-
-* Thu Jul 09 2020 Todd Zullinger <tmz@pobox.com> - 2.28.0-0.0.rc0
-- update to 2.28.0-rc0
-
-* Fri Jun 26 2020 Jitka Plesnikova <jplesnik@redhat.com> - 2.27.0-1.2
-- Perl 5.32 re-rebuild of bootstrapped packages
-
-* Tue Jun 23 2020 Jitka Plesnikova <jplesnik@redhat.com> - 2.27.0-1.1
-- Perl 5.32 rebuild
-
-* Mon Jun 01 2020 Todd Zullinger <tmz@pobox.com> - 2.27.0-1
-- update to 2.27.0
-
-* Tue May 26 2020 Todd Zullinger <tmz@pobox.com> - 2.27.0-0.2.rc2
-- update to 2.27.0-rc2
-
-* Thu May 21 2020 Todd Zullinger <tmz@pobox.com> - 2.27.0-0.1.rc1
-- update to 2.27.0-rc1
-
-* Thu May 21 2020 Merlin Mathesius <mmathesi@redhat.com> - 2.26.2-2
-- Minor conditional fixes for ELN
-
-* Mon Apr 20 2020 Todd Zullinger <tmz@pobox.com> - 2.26.2-1
-- update to 2.26.2 (CVE-2020-11008)
-
-* Tue Apr 14 2020 Todd Zullinger <tmz@pobox.com> - 2.26.1-1
-- update to 2.26.1 (CVE-2020-5260)
-
-* Sat Apr 04 2020 Todd Zullinger <tmz@pobox.com> - 2.26.0-2
-- fix issue with fast-forward rebases when rebase.abbreviateCommands is set
-- fix/quiet rpmlint issues from libsecret split
-
-* Thu Apr 02 2020 Björn Esser <besser82@fedoraproject.org> - 2.26.0-1.1
-- Fix string quoting for rpm >= 4.16
-
-* Sun Mar 22 2020 Todd Zullinger <tmz@pobox.com> - 2.26.0-1
-- update to 2.26.0
-
-* Mon Mar 16 2020 Todd Zullinger <tmz@pobox.com> - 2.26.0-0.3.rc2
-- update to 2.26.0-rc2
-
-* Thu Mar 12 2020 Todd Zullinger <tmz@pobox.com> - 2.26.0-0.2.rc1
-- remove s390x gcc10 workaround (#1799408)
-
-* Tue Mar 10 2020 Todd Zullinger <tmz@pobox.com> - 2.26.0-0.1.rc1
-- update to 2.26.0-rc1
-- adjust make test options
-- add missing build deps for tests
-
-* Fri Mar 06 2020 Todd Zullinger <tmz@pobox.com> - 2.26.0-0.0.rc0
-- update to 2.26.0-rc0
-
-* Wed Feb 26 2020 Todd Zullinger <tmz@pobox.com> - 2.25.1-4
-- use Asciidoctor to build documentation when possible
-
-* Sat Feb 22 2020 Todd Zullinger <tmz@pobox.com> - 2.25.1-3
-- work around issue on s390x with gcc10 (#1799408)
-
-* Wed Feb 19 2020 Todd Zullinger <tmz@pobox.com> - 2.25.1-2
-- split libsecret credential helper into a subpackage (#1804741)
-- consolidate macros for Fedora/EPEL
-- remove unneeded gnome-keyring obsoletes
-
-* Mon Feb 17 2020 Todd Zullinger <tmz@pobox.com> - 2.25.1-1
-- update to 2.25.1
-
-* Tue Jan 28 2020 Fedora Release Engineering <releng@fedoraproject.org> - 2.25.0-2.1
-- Rebuilt for https://fedoraproject.org/wiki/Fedora_32_Mass_Rebuild
-
-* Tue Jan 14 2020 Tom Stellard <tstellar@redhat.com> - 2.25.0-2
-- Use make_build macro when running tests
-
-* Tue Jan 14 2020 Todd Zullinger <tmz@pobox.com> - 2.25.0-1
-- update to 2.25.0
-
-* Thu Jan 09 2020 Todd Zullinger <tmz@pobox.com> - 2.25.0-0.2.rc2
-- update to 2.25.0-rc2
-
-* Fri Jan 03 2020 Todd Zullinger <tmz@pobox.com> - 2.25.0-0.1.rc1
-- update to 2.25.0-rc1
-- only add highlight test BR for ppc64le/x86_64 on EL7+
-
-* Wed Dec 25 2019 Todd Zullinger <tmz@pobox.com> - 2.25.0-0.0.rc0
-- update to 2.25.0-rc0
-
-* Thu Dec 19 2019 Todd Zullinger <tmz@pobox.com> - 2.24.1-2
-- fix git-daemon systemd scriptlets (#1785088)
-
-* Tue Dec 10 2019 Todd Zullinger <tmz@pobox.com> - 2.24.1-1
-- update to 2.24.1 (CVE-2019-1348, CVE-2019-1349, CVE-2019-1350, CVE-2019-1351,
-  CVE-2019-1352, CVE-2019-1353, CVE-2019-1354, and CVE-2019-1387)
-
-* Wed Dec 04 2019 Todd Zullinger <tmz@pobox.com> - 2.24.0-2
-- restore jgit BR for use in tests
-
-* Mon Nov 04 2019 Todd Zullinger <tmz@pobox.com> - 2.24.0-1
-- update to 2.24.0
-
-* Thu Oct 31 2019 Todd Zullinger <tmz@pobox.com> - 2.24.0-0.2.rc2
-- update to 2.24.0-rc2
-
-* Sun Oct 27 2019 Todd Zullinger <tmz@pobox.com> - 2.24.0-0.1.rc1.1
-- disable linkchecker on all EL releases
-
-* Thu Oct 24 2019 Todd Zullinger <tmz@pobox.com> - 2.24.0-0.1.rc1
-- update to 2.24.0-rc1
-- skip failing test in t7812-grep-icase-non-ascii on s390x
-- gitk: add Requires: git-gui (#1765113)
-
-* Sat Oct 19 2019 Todd Zullinger <tmz@pobox.com> - 2.24.0-0.0.rc0
-- update to 2.24.0-rc0
-- fix t0500-progress-display on big-endian arches
-
-* Fri Aug 16 2019 Todd Zullinger <tmz@pobox.com> - 2.23.0-1
-- Update to 2.23.0
-
-* Sun Aug 11 2019 Todd Zullinger <tmz@pobox.com> - 2.23.0-0.2.rc2
-- Update to 2.23.0-rc2
-
-* Fri Aug 02 2019 Todd Zullinger <tmz@pobox.com> - 2.23.0-0.1.rc1
-- Update to 2.23.0-rc1
-
-* Mon Jul 29 2019 Todd Zullinger <tmz@pobox.com> - 2.23.0-0.0.rc0
-- Update to 2.23.0-rc0
-
-* Thu Jul 25 2019 Todd Zullinger <tmz@pobox.com> - 2.22.0-2
-- completion: do not cache if --git-completion-helper fails
-- avoid trailing comments in spec file
-- drop jgit on Fedora > 30
-
-* Thu Jul 25 2019 Fedora Release Engineering <releng@fedoraproject.org> - 2.22.0-1.1
-- Rebuilt for https://fedoraproject.org/wiki/Fedora_31_Mass_Rebuild
-
-* Fri Jun 07 2019 Todd Zullinger <tmz@pobox.com> - 2.22.0-1
-- Update to 2.22.0
-
-* Tue Jun 04 2019 Jitka Plesnikova <jplesnik@redhat.com> - 2.22.0-0.7.rc3
-- Perl 5.30 re-rebuild updated packages
-
-* Mon Jun 03 2019 Todd Zullinger <tmz@pobox.com> - 2.22.0-0.6.rc3
-- Update to 2.22.0-rc3
-
-* Sun Jun 02 2019 Jitka Plesnikova <jplesnik@redhat.com> - 2.22.0-0.5.rc2
-- Perl 5.30 re-rebuild of bootstrapped packages
-
-* Sat Jun 01 2019 Jitka Plesnikova <jplesnik@redhat.com> - 2.22.0-0.4.rc2
-- Perl 5.30 rebuild
-
-* Thu May 30 2019 Todd Zullinger <tmz@pobox.com> - 2.22.0-0.3.rc2
-- Update to 2.22.0-rc1
-
-* Fri May 24 2019 Todd Zullinger <tmz@pobox.com> - 2.22.0-0.2.rc1
-- Apply upstream fixes for diff-parseopt issues on s390x
-
-* Sun May 19 2019 Todd Zullinger <tmz@pobox.com> - 2.22.0-0.1.rc1
-- Update to 2.22.0-rc1
-
-* Mon May 13 2019 Todd Zullinger <tmz@pobox.com> - 2.22.0-0.0.rc0
-- Update to 2.22.0-rc0
-- Ensure a consistent format for test output
-- Improve JGIT test prereq (jgit on Fedora >= 30 is broken)
-- Add perl(JSON::PP) BuildRequires for trace2 tests
-
-* Sun Feb 24 2019 Todd Zullinger <tmz@pobox.com> - 2.21.0-1
-- Update to 2.21.0
-- Move gitweb manpages to gitweb package
-- Link git-citool to git-gui if they are identical
-
-* Tue Feb 19 2019 Todd Zullinger <tmz@pobox.com> - 2.21.0-0.2.rc2
-- Update to 2.21.0.rc2
-
-* Fri Feb 15 2019 Todd Zullinger <tmz@pobox.com>
-- Set SOURCE_DATE_EPOCH and TZ to improve build reproducibility
-
-* Wed Feb 13 2019 Todd Zullinger <tmz@pobox.com> - 2.21.0-0.1.rc1
-- Update to 2.21.0.rc1
-
-* Thu Feb 07 2019 Todd Zullinger <tmz@pobox.com> - 2.21.0-0.0.rc0
-- Update to 2.21.0.rc0
-- Remove %%changelog entries prior to 2017
-
-* Thu Jan 31 2019 Todd Zullinger <tmz@pobox.com> - 2.20.1-2
-- Remove extraneous pcre BuildRequires
-- Add additional BuildRequires for i18n locales used in tests
-- Replace gitweb home-link with inline sed
-- Add gnupg2-smime and perl JSON BuildRequires for tests
-- Work around gpg-agent issues in the test suite
-- Drop gnupg BuildRequires on fedora >= 30
-- Fix formatting of contrib/{contacts,subtree} docs
-- Use %%{build_cflags} and %%{build_ldflags}
-- Drop unneeded TEST_SHELL_PATH make variable
-
-* Thu Jan 31 2019 Fedora Release Engineering <releng@fedoraproject.org> - 2.20.1-1.1
-- Rebuilt for https://fedoraproject.org/wiki/Fedora_30_Mass_Rebuild
