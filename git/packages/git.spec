@@ -76,7 +76,7 @@
 %global _package_note_file  %{_builddir}/%{name}-%{version}%{?rcrev}/.package_note-%{name}-%{version}-%{release}.%{_arch}.ld
 
 Name:           git
-Version:        2.37.3
+Version:        2.38.0
 Release:        1%{?rcrev}%{?dist}
 Summary:        Fast Version Control System
 License:        GPLv2
@@ -478,6 +478,7 @@ Requires:       perl(:MODULE_COMPAT_%(eval "`%{__perl} -V:version`"; echo $versi
 
 %package subtree
 Summary:        Git tools to merge and split repositories
+BuildArch:      noarch
 Requires:       git-core = %{version}-%{release}
 %description subtree
 Git subtrees allow subprojects to be included within a subdirectory
@@ -800,7 +801,7 @@ GIT_SKIP_TESTS=""
 # to limit the maximum stack size.
 # t5541.36 'push 2000 tags over http'
 # t5551.25 'clone the 2,000 tag repo to check OS command line overflow'
-GIT_SKIP_TESTS="$GIT_SKIP_TESTS t5541.36 t5551.25"
+GIT_SKIP_TESTS="$GIT_SKIP_TESTS t5541.37 t5551.25"
 %endif
 # endif aarch64 %%{arm} %%{power64}
 
@@ -1005,6 +1006,19 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Mon Oct 03 2022 Todd Zullinger <tmz@pobox.com> - 2.38.0-1
+- update to 2.38.0
+
+* Wed Sep 28 2022 Todd Zullinger <tmz@pobox.com> - 2.38.0-0.2.rc2
+- update to 2.38.0-rc2
+
+* Wed Sep 21 2022 Todd Zullinger <tmz@pobox.com> - 2.38.0-0.1.rc1
+- update to 2.38.0-rc1
+- git-subtree sub-package is noarch
+
+* Fri Sep 16 2022 Todd Zullinger <tmz@pobox.com> - 2.38.0-0.0.rc0
+- update to 2.38.0-rc0
+
 * Tue Aug 30 2022 Todd Zullinger <tmz@pobox.com> - 2.37.3-1
 - update to 2.37.3
 - remove %%changelog entries prior to 2020
