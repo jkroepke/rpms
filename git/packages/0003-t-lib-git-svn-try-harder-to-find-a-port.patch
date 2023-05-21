@@ -1,4 +1,4 @@
-From aa5105dc115b43edc6c9c11714b092583f1221aa Mon Sep 17 00:00:00 2001
+From 41423d666fd52eaa6aa2b44a0de1b81d0857ca06 Mon Sep 17 00:00:00 2001
 From: Todd Zullinger <tmz@pobox.com>
 Date: Fri, 26 Aug 2022 18:28:44 -0400
 Subject: [PATCH] t/lib-git-svn: try harder to find a port

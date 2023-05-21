@@ -1,4 +1,4 @@
-From aedeaaf788bd8a7fc5a1887196b6f6d8a5c31362 Mon Sep 17 00:00:00 2001
+From 89ccbc15948db9ddbf74530e3fd66dd78ae897ae Mon Sep 17 00:00:00 2001
 From: Todd Zullinger <tmz@pobox.com>
 Date: Sun, 21 Aug 2022 13:49:57 -0400
 Subject: [PATCH] t/lib-httpd: try harder to find a port for apache
@@ -30,10 +30,10 @@ Signed-off-by: Todd Zullinger <tmz@pobox.com>
  1 file changed, 18 insertions(+), 11 deletions(-)
 
 diff --git a/t/lib-httpd.sh b/t/lib-httpd.sh
-index 1f6b9b08d1..9279dcd659 100644
+index 2fb1b2ae56..4afdf5a6aa 100644
 --- a/t/lib-httpd.sh
 +++ b/t/lib-httpd.sh
-@@ -175,19 +175,26 @@ prepare_httpd() {
+@@ -206,19 +206,26 @@ enable_cgipassauth () {
  }
  
  start_httpd() {

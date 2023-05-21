@@ -1,4 +1,4 @@
-From 16750d024ce038b019ab2e9ee5639901e445af37 Mon Sep 17 00:00:00 2001
+From e90e1068ddc9cfa3badd23b16a46c57ed6d8308a Mon Sep 17 00:00:00 2001
 From: Todd Zullinger <tmz@pobox.com>
 Date: Fri, 26 Aug 2022 18:28:44 -0400
 Subject: [PATCH] t/lib-git-daemon: try harder to find a port
