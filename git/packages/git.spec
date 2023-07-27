@@ -78,7 +78,7 @@
 
 Name:           git
 Version:        2.41.0
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Fast Version Control System
 License:        BSD-3-Clause AND GPL-2.0-only AND GPL-2.0-or-later AND LGPL-2.1-or-later AND MIT
 URL:            https://git-scm.com/
@@ -129,7 +129,7 @@ Patch3:         0003-t-lib-git-svn-try-harder-to-find-a-port.patch
 
 %if %{with docs}
 # pod2man is needed to build Git.3pm
-BuildRequires:  %{_bindir}/pod2man
+BuildRequires:  /usr/bin/pod2man
 %if %{with asciidoctor}
 BuildRequires:  docbook5-style-xsl
 BuildRequires:  rubygem-asciidoctor
@@ -1039,6 +1039,9 @@ rmdir --ignore-fail-on-non-empty "$testdir"
 %{?with_docs:%{_pkgdocdir}/git-svn.html}
 
 %changelog
+* Wed Jul 19 2023 Fedora Release Engineering <releng@fedoraproject.org> - 2.41.0-2
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_39_Mass_Rebuild
+
 * Thu Jun 01 2023 Todd Zullinger <tmz@pobox.com> - 2.41.0-1
 - update to 2.41.0
 
